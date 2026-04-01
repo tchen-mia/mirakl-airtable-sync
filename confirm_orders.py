@@ -197,21 +197,10 @@ def confirm_orders():
                     update_all_records_for_order(order_id, {'Mirakl': 'Confirmed'})
                     print(f"Order {order_id} confirmed (has books — awaiting tracking number)")
                 else:
-                    # Digital only — try to auto-ship immediately
-                    try:
-                        ship_order_in_mirakl(order_id)
-                        update_all_records_for_order(order_id, {'Mirakl': 'Shipped'})
-                        print(f"Order {order_id} confirmed and shipped (digital)")
-                    except Exception as ship_err:
-                        # OR24 failed — tracking may be required by operator config
-                        update_all_records_for_order(order_id, {'Mirakl': 'Confirmed'})
-                        print(f"Auto-ship failed for {order_id}: {ship_err}")
-                        send_error_email(
-                            f"Auto-ship failed: Order {order_id}",
-                            f"Order {order_id} was accepted in Mirakl but could not be auto-shipped.\n\n"
-                            f"Error: {ship_err}\n\n"
-                            f"The CS team may need to add a tracking number and set status to Ship manually."
-                        )
+                    # Digital only — set to Confirmed, auto_ship_digital_orders() will
+                    # ship it on the next run once Mirakl finishes payment processing
+                    update_all_records_for_order(order_id, {'Mirakl': 'Confirmed'})
+                    print(f"Order {order_id} confirmed (digital — will auto-ship once payment clears)")
 
                 confirmed_count += 1
 
@@ -229,6 +218,42 @@ def confirm_orders():
         print(msg)
         send_error_email("Mirakl Confirm Error", msg)
         raise
+
+
+def auto_ship_digital_orders():
+    """
+    On each run, find digital orders in Confirmed status and try OR24.
+    After acceptance, Mirakl moves orders through WAITING_DEBIT_PAYMENT before
+    reaching SHIPPING. This function retries silently until the order is ready.
+    """
+    try:
+        records = get_airtable_records("{Mirakl} = 'Confirmed'")
+        if not records:
+            return
+
+        # Collect order IDs that have no book items
+        order_ids = set()
+        for record in records:
+            order_id = record.get('fields', {}).get('Ariba Invoice #')
+            if order_id:
+                order_ids.add(order_id)
+
+        for order_id in order_ids:
+            if order_has_books(order_id):
+                continue  # Book orders wait for CS to set Ship with tracking number
+            try:
+                ship_order_in_mirakl(order_id)
+                update_all_records_for_order(order_id, {'Mirakl': 'Shipped'})
+                print(f"Auto-shipped digital order {order_id}")
+            except Exception as e:
+                # Silently skip — order likely still in WAITING_DEBIT_PAYMENT
+                # It will be retried on the next script run
+                print(f"Order {order_id} not ready to ship yet (will retry): {e}")
+
+    except Exception as e:
+        msg = f"auto_ship_digital_orders failed: {e}"
+        print(msg)
+        send_error_email("Mirakl Auto-Ship Error", msg)
 
 
 def ship_orders():
@@ -282,4 +307,5 @@ def ship_orders():
 
 if __name__ == '__main__':
     confirm_orders()
+    auto_ship_digital_orders()
     ship_orders()
