@@ -39,7 +39,7 @@ def get_airtable_records(filter_formula):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
     params = {
         'filterByFormula': filter_formula,
-        'fields[]': ['Ariba Invoice #', 'Mirakl', 'Type', 'Tracking Number'],
+        'fields[]': ['Ariba Invoice #', 'Mirakl', 'Type', 'Tracking Number', 'Site'],
         'pageSize': 100
     }
     records = []
@@ -82,8 +82,8 @@ def order_has_books(order_id):
     return False
 
 
-def get_order_line_ids(order_id):
-    """Fetch order from Mirakl and return its line IDs."""
+def get_order_from_mirakl(order_id):
+    """Fetch order details from Mirakl. Returns the order dict."""
     headers = {'Authorization': MIRAKL_API_KEY}
     response = requests.get(
         f"{MIRAKL_API_URL}/api/orders",
@@ -97,7 +97,41 @@ def get_order_line_ids(order_id):
     orders = response.json().get('orders', [])
     if not orders:
         raise Exception(f"Order {order_id} not found in Mirakl")
-    return [line['order_line_id'] for line in orders[0].get('order_lines', [])]
+    return orders[0]
+
+
+def get_order_line_ids(order_id):
+    """Fetch order from Mirakl and return its line IDs."""
+    order = get_order_from_mirakl(order_id)
+    return [line['order_line_id'] for line in order.get('order_lines', [])]
+
+
+def get_shipping_fields(order_id):
+    """Fetch order from Mirakl and return shipping info as individual Airtable field values."""
+    try:
+        order = get_order_from_mirakl(order_id)
+        customer = order.get('customer', {})
+        addr = customer.get('shipping_address', {})
+        if not addr:
+            return {}
+        fields = {}
+        if addr.get('street1'):
+            fields['Address Line 1'] = addr['street1']
+        if addr.get('street2'):
+            fields['Address Line 2'] = addr['street2']
+        if addr.get('city'):
+            fields['City'] = addr['city']
+        if addr.get('state_code'):
+            fields['State'] = addr['state_code']
+        if addr.get('zip_code'):
+            fields['Zip Code'] = addr['zip_code']
+        phone = addr.get('phone') or customer.get('phone', '')
+        if phone:
+            fields['Phone'] = phone
+        return fields
+    except Exception as e:
+        print(f"Could not fetch shipping fields for order {order_id}: {e}")
+        return {}
 
 
 def accept_order_in_mirakl(order_id):
@@ -170,9 +204,9 @@ def ship_order_in_mirakl(order_id):
 
 def confirm_orders():
     """
-    Handle Confirm → Confirmed (books) or Confirm → Shipped (digital).
-    Digital orders are auto-shipped after acceptance.
-    Book orders wait for a tracking number before shipping.
+    Handle Confirm → Confirmed for all orders.
+    Accepts the order in Mirakl and stores the shipping address in Airtable.
+    CS team then sets Mirakl = Ship when ready (book orders require a tracking number).
     """
     try:
         records = get_airtable_records("{Mirakl} = 'Confirm'")
@@ -192,16 +226,10 @@ def confirm_orders():
             try:
                 accept_order_in_mirakl(order_id)
 
-                if order_has_books(order_id):
-                    # Physical items — wait for tracking number before shipping
-                    update_all_records_for_order(order_id, {'Mirakl': 'Confirmed'})
-                    print(f"Order {order_id} confirmed (has books — awaiting tracking number)")
-                else:
-                    # Digital only — set to Confirmed, auto_ship_digital_orders() will
-                    # ship it on the next run once Mirakl finishes payment processing
-                    update_all_records_for_order(order_id, {'Mirakl': 'Confirmed'})
-                    print(f"Order {order_id} confirmed (digital — will auto-ship once payment clears)")
-
+                update_fields = {'Mirakl': 'Confirmed'}
+                update_fields.update(get_shipping_fields(order_id))
+                update_all_records_for_order(order_id, update_fields)
+                print(f"Order {order_id} confirmed — set Mirakl to Ship when ready")
                 confirmed_count += 1
 
             except Exception as e:
@@ -233,51 +261,11 @@ def get_site_prefix_for_order(order_id):
     return 'DIGITAL'  # fallback if site is missing
 
 
-def auto_ship_digital_orders():
-    """
-    On each run, find digital orders in Confirmed status and try OR23 + OR24.
-    Tracking number is auto-generated as {SITE_PREFIX}-{order_id}.
-    Retries silently until Mirakl finishes payment processing (WAITING_DEBIT_PAYMENT).
-    """
-    try:
-        records = get_airtable_records("{Mirakl} = 'Confirmed'")
-        if not records:
-            return
-
-        order_ids = set()
-        for record in records:
-            order_id = record.get('fields', {}).get('Ariba Invoice #')
-            if order_id:
-                order_ids.add(order_id)
-
-        for order_id in order_ids:
-            if order_has_books(order_id):
-                continue  # Book orders wait for CS to set Ship with tracking number
-            try:
-                prefix = get_site_prefix_for_order(order_id)
-                tracking_number = f"{prefix}-{order_id}"
-                add_tracking_in_mirakl(order_id, tracking_number)
-                ship_order_in_mirakl(order_id)
-                update_all_records_for_order(order_id, {
-                    'Mirakl': 'Shipped',
-                    'Tracking Number': tracking_number
-                })
-                print(f"Auto-shipped digital order {order_id} (tracking: {tracking_number})")
-            except Exception as e:
-                # Silently skip — order likely still in WAITING_DEBIT_PAYMENT
-                # It will be retried on the next script run
-                print(f"Order {order_id} not ready to ship yet (will retry): {e}")
-
-    except Exception as e:
-        msg = f"auto_ship_digital_orders failed: {e}"
-        print(msg)
-        send_error_email("Mirakl Auto-Ship Error", msg)
-
-
 def ship_orders():
     """
-    Handle Ship → Shipped for book orders.
-    CS team enters a tracking number in Airtable and sets Mirakl = Ship.
+    Handle Ship → Shipped for all orders.
+    CS team sets Mirakl = Ship (and enters a tracking number for book orders).
+    Digital orders auto-generate a tracking number if none is provided.
     Script calls OR23 (tracking) + OR24 (ship) and updates status to Shipped.
     """
     try:
@@ -299,12 +287,16 @@ def ship_orders():
 
         for order_id, tracking_number in order_to_tracking.items():
             if not tracking_number:
-                print(f"Order {order_id} has no tracking number — skipping")
-                continue
+                if order_has_books(order_id):
+                    print(f"Order {order_id} has no tracking number — skipping")
+                    continue
+                # Digital order — auto-generate tracking number
+                prefix = get_site_prefix_for_order(order_id)
+                tracking_number = f"{prefix}-{order_id}"
             try:
                 add_tracking_in_mirakl(order_id, tracking_number)
                 ship_order_in_mirakl(order_id)
-                update_all_records_for_order(order_id, {'Mirakl': 'Shipped'})
+                update_all_records_for_order(order_id, {'Mirakl': 'Shipped', 'Tracking Number': tracking_number})
                 shipped_count += 1
                 print(f"Shipped order {order_id} (tracking: {tracking_number})")
             except Exception as e:
@@ -325,5 +317,4 @@ def ship_orders():
 
 if __name__ == '__main__':
     confirm_orders()
-    auto_ship_digital_orders()
     ship_orders()
