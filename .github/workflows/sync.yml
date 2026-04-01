@@ -1,0 +1,59 @@
+name: Mirakl Order Sync
+
+on:
+  schedule:
+    # Every 5 minutes during business hours (7am–11pm ET = 11am–3am UTC)
+    - cron: '*/5 11-23 * * *'
+    - cron: '*/5 0-3 * * *'
+    # Every hour outside business hours (midnight–6am ET = 4am–10am UTC)
+    - cron: '0 4-10 * * *'
+  workflow_dispatch: # Allow manual trigger from GitHub Actions tab
+
+jobs:
+  sync-orders:
+    name: Sync new orders to Airtable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run sync
+        env:
+          MIRAKL_API_URL: ${{ secrets.MIRAKL_API_URL }}
+          MIRAKL_API_KEY: ${{ secrets.MIRAKL_API_KEY }}
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+          AIRTABLE_TABLE_NAME: ${{ secrets.AIRTABLE_TABLE_NAME }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ERROR_EMAIL_TO: ${{ secrets.ERROR_EMAIL_TO }}
+        run: python sync_orders.py
+
+  confirm-orders:
+    name: Confirm approved orders in Mirakl
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run confirm
+        env:
+          MIRAKL_API_URL: ${{ secrets.MIRAKL_API_URL }}
+          MIRAKL_API_KEY: ${{ secrets.MIRAKL_API_KEY }}
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+          AIRTABLE_TABLE_NAME: ${{ secrets.AIRTABLE_TABLE_NAME }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ERROR_EMAIL_TO: ${{ secrets.ERROR_EMAIL_TO }}
+        run: python confirm_orders.py
