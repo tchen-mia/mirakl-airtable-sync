@@ -220,18 +220,30 @@ def confirm_orders():
         raise
 
 
+SITE_PREFIX = {'MIA': 'MIA', 'MP': 'MP', 'MP+': 'MPP'}
+
+
+def get_site_prefix_for_order(order_id):
+    """Return the tracking number prefix based on the Site of the first digital line item."""
+    records = get_airtable_records(f"{{Ariba Invoice #}} = '{order_id}'")
+    for record in records:
+        site = record.get('fields', {}).get('Site', '')
+        if site in SITE_PREFIX:
+            return SITE_PREFIX[site]
+    return 'DIGITAL'  # fallback if site is missing
+
+
 def auto_ship_digital_orders():
     """
-    On each run, find digital orders in Confirmed status and try OR24.
-    After acceptance, Mirakl moves orders through WAITING_DEBIT_PAYMENT before
-    reaching SHIPPING. This function retries silently until the order is ready.
+    On each run, find digital orders in Confirmed status and try OR23 + OR24.
+    Tracking number is auto-generated as {SITE_PREFIX}-{order_id}.
+    Retries silently until Mirakl finishes payment processing (WAITING_DEBIT_PAYMENT).
     """
     try:
         records = get_airtable_records("{Mirakl} = 'Confirmed'")
         if not records:
             return
 
-        # Collect order IDs that have no book items
         order_ids = set()
         for record in records:
             order_id = record.get('fields', {}).get('Ariba Invoice #')
@@ -242,9 +254,15 @@ def auto_ship_digital_orders():
             if order_has_books(order_id):
                 continue  # Book orders wait for CS to set Ship with tracking number
             try:
+                prefix = get_site_prefix_for_order(order_id)
+                tracking_number = f"{prefix}-{order_id}"
+                add_tracking_in_mirakl(order_id, tracking_number)
                 ship_order_in_mirakl(order_id)
-                update_all_records_for_order(order_id, {'Mirakl': 'Shipped'})
-                print(f"Auto-shipped digital order {order_id}")
+                update_all_records_for_order(order_id, {
+                    'Mirakl': 'Shipped',
+                    'Tracking Number': tracking_number
+                })
+                print(f"Auto-shipped digital order {order_id} (tracking: {tracking_number})")
             except Exception as e:
                 # Silently skip — order likely still in WAITING_DEBIT_PAYMENT
                 # It will be retried on the next script run
