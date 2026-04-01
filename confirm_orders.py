@@ -83,12 +83,18 @@ def get_all_records_for_order(order_id):
 
 def accept_order_in_mirakl(order_id):
     """Call Mirakl API to accept an order."""
-    headers = {'Authorization': MIRAKL_API_KEY}
+    headers = {
+        'Authorization': MIRAKL_API_KEY,
+        'Content-Type': 'application/json'
+    }
     response = requests.put(
         f"{MIRAKL_API_URL}/api/orders/{order_id}/accept",
         headers=headers,
+        json={},
         timeout=30
     )
+    if not response.ok:
+        print(f"Mirakl accept error {response.status_code}: {response.text}")
     response.raise_for_status()
 
 
