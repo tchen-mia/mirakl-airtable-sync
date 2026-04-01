@@ -23,8 +23,8 @@ SKU_MAP = {
     'MP1MO':    {'type': 'Monthly', 'site': 'MP',  'months_per_unit': 1},
     'MP12MO':   {'type': 'Annual',  'site': 'MP',  'months_per_unit': 12},
     'MPLIFE':   {'type': 'IndLife', 'site': 'MP',  'duration': 'lifetime'},
-    'MPPMP1MO': {'type': 'Monthly', 'site': 'MP',  'months_per_unit': 1},
-    'MPP1MO':   {'type': 'Monthly', 'site': 'MP',  'months_per_unit': 1},
+    'MPPMP1MO': {'type': 'Monthly', 'site': 'MP+', 'months_per_unit': 1},
+    'MPP1MO':   {'type': 'Monthly', 'site': 'MP+', 'months_per_unit': 1},
 }
 
 # All valid Duration options in Airtable
