@@ -112,7 +112,7 @@ def accept_order_in_mirakl(order_id):
     }
     body = {
         'order_lines': [
-            {'id': line_id, 'acceptance': 'ACCEPTED'}
+            {'order_line_id': line_id, 'acceptance': 'ACCEPTED'}
             for line_id in line_ids
         ]
     }
@@ -122,6 +122,7 @@ def accept_order_in_mirakl(order_id):
         json=body,
         timeout=30
     )
+    print(f"Sending to Mirakl: {body}")
     if not response.ok:
         print(f"Mirakl accept error {response.status_code}: {response.text}")
     response.raise_for_status()
