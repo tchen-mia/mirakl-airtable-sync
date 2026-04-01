@@ -33,17 +33,16 @@ def send_error_email(subject, body):
         print(f"Failed to send error email: {e}")
 
 
-def get_records_to_confirm():
-    """Fetch all Airtable records where Mirakl = 'Confirm'."""
+def get_airtable_records(filter_formula):
+    """Fetch Airtable records matching a filter formula."""
     headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
     params = {
-        'filterByFormula': "{Mirakl} = 'Confirm'",
-        'fields[]': ['Ariba Invoice #', 'Mirakl'],
+        'filterByFormula': filter_formula,
+        'fields[]': ['Ariba Invoice #', 'Mirakl', 'Type', 'Tracking Number'],
         'pageSize': 100
     }
     records = []
-
     while True:
         response = requests.get(url, headers=headers, params=params, timeout=30)
         response.raise_for_status()
@@ -53,32 +52,34 @@ def get_records_to_confirm():
         if not offset:
             break
         params['offset'] = offset
-
     return records
 
 
-def get_all_records_for_order(order_id):
-    """Fetch all Airtable records for a given order ID, regardless of Mirakl status."""
-    headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
-    params = {
-        'filterByFormula': f"{{Ariba Invoice #}} = '{order_id}'",
-        'fields[]': ['Ariba Invoice #', 'Mirakl'],
-        'pageSize': 100
+def update_airtable_record(record_id, fields):
+    headers = {
+        'Authorization': f'Bearer {AIRTABLE_API_KEY}',
+        'Content-Type': 'application/json'
     }
-    records = []
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}/{record_id}"
+    response = requests.patch(url, headers=headers, json={'fields': fields}, timeout=30)
+    response.raise_for_status()
 
-    while True:
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        records.extend(data.get('records', []))
-        offset = data.get('offset')
-        if not offset:
-            break
-        params['offset'] = offset
 
-    return records
+def update_all_records_for_order(order_id, fields):
+    """Update every Airtable row for a given order ID."""
+    all_records = get_airtable_records(f"{{Ariba Invoice #}} = '{order_id}'")
+    for record in all_records:
+        update_airtable_record(record['id'], fields)
+
+
+def order_has_books(order_id):
+    """Return True if any line item in the order has Type = Book."""
+    all_records = get_airtable_records(f"{{Ariba Invoice #}} = '{order_id}'")
+    for record in all_records:
+        type_value = record.get('fields', {}).get('Type', [])
+        if isinstance(type_value, list) and 'Book' in type_value:
+            return True
+    return False
 
 
 def get_order_line_ids(order_id):
@@ -96,12 +97,11 @@ def get_order_line_ids(order_id):
     orders = response.json().get('orders', [])
     if not orders:
         raise Exception(f"Order {order_id} not found in Mirakl")
-    order_lines = orders[0].get('order_lines', [])
-    return [line['order_line_id'] for line in order_lines]
+    return [line['order_line_id'] for line in orders[0].get('order_lines', [])]
 
 
 def accept_order_in_mirakl(order_id):
-    """Fetch order line IDs then call Mirakl API to accept all lines."""
+    """Accept all order lines via Mirakl OR21."""
     line_ids = get_order_line_ids(order_id)
     if not line_ids:
         raise Exception(f"No order lines found for order {order_id}")
@@ -127,45 +127,95 @@ def accept_order_in_mirakl(order_id):
     response.raise_for_status()
 
 
-def update_airtable_record(record_id, fields):
+def add_tracking_in_mirakl(order_id, tracking_number):
+    """Add FedEx tracking info via Mirakl OR23."""
     headers = {
-        'Authorization': f'Bearer {AIRTABLE_API_KEY}',
+        'Authorization': MIRAKL_API_KEY,
         'Content-Type': 'application/json'
     }
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}/{record_id}"
-    response = requests.patch(url, headers=headers, json={'fields': fields}, timeout=30)
+    body = {
+        'carrier_code': 'FEDEX',
+        'carrier_name': 'FedEx',
+        'carrier_standard_code': 'FEDEX',
+        'carrier_url': 'https://www.fedex.com',
+        'tracking_number': tracking_number
+    }
+    response = requests.put(
+        f"{MIRAKL_API_URL}/api/orders/{order_id}/tracking",
+        headers=headers,
+        json=body,
+        timeout=30
+    )
+    if not response.ok:
+        print(f"Mirakl tracking error {response.status_code}: {response.text}")
+    response.raise_for_status()
+
+
+def ship_order_in_mirakl(order_id):
+    """Mark order as shipped via Mirakl OR24."""
+    headers = {
+        'Authorization': MIRAKL_API_KEY,
+        'Content-Type': 'application/json'
+    }
+    response = requests.put(
+        f"{MIRAKL_API_URL}/api/orders/{order_id}/ship",
+        headers=headers,
+        json={},
+        timeout=30
+    )
+    if not response.ok:
+        print(f"Mirakl ship error {response.status_code}: {response.text}")
     response.raise_for_status()
 
 
 def confirm_orders():
+    """
+    Handle Confirm → Confirmed (books) or Confirm → Shipped (digital).
+    Digital orders are auto-shipped after acceptance.
+    Book orders wait for a tracking number before shipping.
+    """
     try:
-        records = get_records_to_confirm()
-
+        records = get_airtable_records("{Mirakl} = 'Confirm'")
         if not records:
             print("No orders to confirm.")
             return
 
-        # Group records by order ID so we only call Mirakl once per order
-        # (multiple Airtable rows can share the same order ID for multi-item orders)
-        order_to_records = {}
+        order_ids = set()
         for record in records:
             order_id = record.get('fields', {}).get('Ariba Invoice #')
             if order_id:
-                order_to_records.setdefault(order_id, []).append(record['id'])
+                order_ids.add(order_id)
 
         confirmed_count = 0
 
-        for order_id in order_to_records.keys():
+        for order_id in order_ids:
             try:
                 accept_order_in_mirakl(order_id)
-                # Update ALL rows for this order (not just the one set to Confirm)
-                all_records = get_all_records_for_order(order_id)
-                for record in all_records:
-                    update_airtable_record(record['id'], {'Mirakl': 'Confirmed'})
+
+                if order_has_books(order_id):
+                    # Physical items — wait for tracking number before shipping
+                    update_all_records_for_order(order_id, {'Mirakl': 'Confirmed'})
+                    print(f"Order {order_id} confirmed (has books — awaiting tracking number)")
+                else:
+                    # Digital only — try to auto-ship immediately
+                    try:
+                        ship_order_in_mirakl(order_id)
+                        update_all_records_for_order(order_id, {'Mirakl': 'Shipped'})
+                        print(f"Order {order_id} confirmed and shipped (digital)")
+                    except Exception as ship_err:
+                        # OR24 failed — tracking may be required by operator config
+                        update_all_records_for_order(order_id, {'Mirakl': 'Confirmed'})
+                        print(f"Auto-ship failed for {order_id}: {ship_err}")
+                        send_error_email(
+                            f"Auto-ship failed: Order {order_id}",
+                            f"Order {order_id} was accepted in Mirakl but could not be auto-shipped.\n\n"
+                            f"Error: {ship_err}\n\n"
+                            f"The CS team may need to add a tracking number and set status to Ship manually."
+                        )
+
                 confirmed_count += 1
-                print(f"Confirmed order {order_id} ({len(all_records)} row(s) updated)")
+
             except Exception as e:
-                # Log and continue — don't let one failed order block the rest
                 print(f"Failed to confirm order {order_id}: {e}")
                 send_error_email(
                     f"Mirakl Confirm Error: Order {order_id}",
@@ -175,11 +225,61 @@ def confirm_orders():
         print(f"Done. {confirmed_count} order(s) confirmed.")
 
     except Exception as e:
-        msg = f"confirm_orders.py failed: {e}"
+        msg = f"confirm_orders failed: {e}"
         print(msg)
         send_error_email("Mirakl Confirm Error", msg)
         raise
 
 
+def ship_orders():
+    """
+    Handle Ship → Shipped for book orders.
+    CS team enters a tracking number in Airtable and sets Mirakl = Ship.
+    Script calls OR23 (tracking) + OR24 (ship) and updates status to Shipped.
+    """
+    try:
+        records = get_airtable_records("{Mirakl} = 'Ship'")
+        if not records:
+            print("No orders to ship.")
+            return
+
+        order_to_tracking = {}
+        for record in records:
+            order_id = record.get('fields', {}).get('Ariba Invoice #')
+            tracking = record.get('fields', {}).get('Tracking Number', '').strip()
+            if order_id and tracking:
+                order_to_tracking[order_id] = tracking
+            elif order_id and order_id not in order_to_tracking:
+                order_to_tracking[order_id] = None
+
+        shipped_count = 0
+
+        for order_id, tracking_number in order_to_tracking.items():
+            if not tracking_number:
+                print(f"Order {order_id} has no tracking number — skipping")
+                continue
+            try:
+                add_tracking_in_mirakl(order_id, tracking_number)
+                ship_order_in_mirakl(order_id)
+                update_all_records_for_order(order_id, {'Mirakl': 'Shipped'})
+                shipped_count += 1
+                print(f"Shipped order {order_id} (tracking: {tracking_number})")
+            except Exception as e:
+                print(f"Failed to ship order {order_id}: {e}")
+                send_error_email(
+                    f"Mirakl Ship Error: Order {order_id}",
+                    f"Failed to ship order {order_id} in Mirakl.\n\nError: {e}"
+                )
+
+        print(f"Done. {shipped_count} order(s) shipped.")
+
+    except Exception as e:
+        msg = f"ship_orders failed: {e}"
+        print(msg)
+        send_error_email("Mirakl Ship Error", msg)
+        raise
+
+
 if __name__ == '__main__':
     confirm_orders()
+    ship_orders()
