@@ -117,6 +117,27 @@ def map_sku(sku, quantity):
     return (sku_type, None, site, True)
 
 
+def get_workbook_map():
+    """Return a dict mapping workbook name (lowercase) → Airtable record ID."""
+    headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Workbooks"
+    workbook_map = {}
+    params = {'fields[]': 'Name', 'pageSize': 100}
+    while True:
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        for record in data.get('records', []):
+            name = record.get('fields', {}).get('Name', '')
+            if name:
+                workbook_map[name.lower()] = record['id']
+        offset = data.get('offset')
+        if not offset:
+            break
+        params['offset'] = offset
+    return workbook_map
+
+
 def create_airtable_record(fields):
     headers = {
         'Authorization': f'Bearer {AIRTABLE_API_KEY}',
@@ -134,6 +155,7 @@ def sync_orders():
     try:
         existing_ids = get_existing_order_ids()
         orders = get_mirakl_orders()
+        workbook_map = get_workbook_map()
         new_count = 0
 
         for order in orders:
@@ -155,15 +177,17 @@ def sync_orders():
                 sku = line.get('offer_sku', '')
                 quantity = int(line.get('quantity', 1))
                 amount = float(line.get('total_price', line.get('price', 0)))
+                title = line.get('offer_title', '')
                 if sku in merged:
                     merged[sku]['quantity'] += quantity
                     merged[sku]['amount'] += amount
                 else:
-                    merged[sku] = {'quantity': quantity, 'amount': amount}
+                    merged[sku] = {'quantity': quantity, 'amount': amount, 'title': title}
 
             for sku, data in merged.items():
                 quantity = data['quantity']
                 amount = data['amount']
+                title = data.get('title', '')
 
                 sku_type, duration, site, needs_review = map_sku(sku, quantity)
                 mirakl_status = 'New - Review' if needs_review else 'New'
@@ -182,6 +206,13 @@ def sync_orders():
                     fields['Duration'] = duration
                 if site:
                     fields['Site'] = site
+                if title:
+                    workbook_id = workbook_map.get(title.lower())
+                    if workbook_id:
+                        fields['Workbooks'] = [workbook_id]
+                    else:
+                        print(f"No Workbooks match found for: {title!r}")
+                        fields['Mirakl'] = 'New - Review'
 
                 create_airtable_record(fields)
                 new_count += 1
