@@ -85,15 +85,18 @@ def get_order_line_ids(order_id):
     """Fetch order from Mirakl and return its line IDs."""
     headers = {'Authorization': MIRAKL_API_KEY}
     response = requests.get(
-        f"{MIRAKL_API_URL}/api/orders/{order_id}",
+        f"{MIRAKL_API_URL}/api/orders",
         headers=headers,
+        params={'order_ids': order_id},
         timeout=30
     )
     if not response.ok:
         print(f"Mirakl get order error {response.status_code}: {response.text}")
     response.raise_for_status()
-    order = response.json()
-    return [line['id'] for line in order.get('order_lines', [])]
+    orders = response.json().get('orders', [])
+    if not orders:
+        raise Exception(f"Order {order_id} not found in Mirakl")
+    return [line['id'] for line in orders[0].get('order_lines', [])]
 
 
 def accept_order_in_mirakl(order_id):
