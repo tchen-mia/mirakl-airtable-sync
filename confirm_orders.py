@@ -81,16 +81,41 @@ def get_all_records_for_order(order_id):
     return records
 
 
+def get_order_line_ids(order_id):
+    """Fetch order from Mirakl and return its line IDs."""
+    headers = {'Authorization': MIRAKL_API_KEY}
+    response = requests.get(
+        f"{MIRAKL_API_URL}/api/orders/{order_id}",
+        headers=headers,
+        timeout=30
+    )
+    if not response.ok:
+        print(f"Mirakl get order error {response.status_code}: {response.text}")
+    response.raise_for_status()
+    order = response.json()
+    return [line['id'] for line in order.get('order_lines', [])]
+
+
 def accept_order_in_mirakl(order_id):
-    """Call Mirakl API to accept an order."""
+    """Fetch order line IDs then call Mirakl API to accept all lines."""
+    line_ids = get_order_line_ids(order_id)
+    if not line_ids:
+        raise Exception(f"No order lines found for order {order_id}")
+
     headers = {
         'Authorization': MIRAKL_API_KEY,
         'Content-Type': 'application/json'
     }
+    body = {
+        'order_lines': [
+            {'id': line_id, 'acceptance': {'status': 'ACCEPTED'}}
+            for line_id in line_ids
+        ]
+    }
     response = requests.put(
         f"{MIRAKL_API_URL}/api/orders/{order_id}/accept",
         headers=headers,
-        json={},
+        json=body,
         timeout=30
     )
     if not response.ok:
