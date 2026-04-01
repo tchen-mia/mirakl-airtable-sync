@@ -106,33 +106,6 @@ def get_order_line_ids(order_id):
     return [line['order_line_id'] for line in order.get('order_lines', [])]
 
 
-def get_shipping_fields(order_id):
-    """Fetch order from Mirakl and return shipping info as individual Airtable field values."""
-    try:
-        order = get_order_from_mirakl(order_id)
-        customer = order.get('customer', {})
-        addr = customer.get('shipping_address', {})
-        if not addr:
-            return {}
-        fields = {}
-        if addr.get('street1'):
-            fields['Address Line 1'] = addr['street1']
-        if addr.get('street2'):
-            fields['Address Line 2'] = addr['street2']
-        if addr.get('city'):
-            fields['City'] = addr['city']
-        if addr.get('state_code'):
-            fields['State'] = addr['state_code']
-        if addr.get('zip_code'):
-            fields['Zip Code'] = addr['zip_code']
-        phone = addr.get('phone') or customer.get('phone', '')
-        if phone:
-            fields['Phone'] = phone
-        return fields
-    except Exception as e:
-        print(f"Could not fetch shipping fields for order {order_id}: {e}")
-        return {}
-
 
 def accept_order_in_mirakl(order_id):
     """Accept all order lines via Mirakl OR21."""
@@ -226,9 +199,7 @@ def confirm_orders():
             try:
                 accept_order_in_mirakl(order_id)
 
-                update_fields = {'Mirakl': 'Confirmed'}
-                update_fields.update(get_shipping_fields(order_id))
-                update_all_records_for_order(order_id, update_fields)
+                update_all_records_for_order(order_id, {'Mirakl': 'Confirmed'})
                 print(f"Order {order_id} confirmed — set Mirakl to Ship when ready")
                 confirmed_count += 1
 

@@ -1,6 +1,7 @@
 import os
 import requests
 import smtplib
+from datetime import date, timedelta
 from email.mime.text import MIMEText
 
 MIRAKL_API_URL = os.environ['MIRAKL_API_URL']
@@ -170,6 +171,23 @@ def sync_orders():
             customer_name = f"{customer.get('firstname', '')} {customer.get('lastname', '')}".strip()
             customer_email = customer.get('email', '')
 
+            # Shipping address (available at WAITING_ACCEPTANCE)
+            addr = customer.get('shipping_address', {})
+            address_fields = {}
+            if addr.get('street1'):
+                address_fields['Address Line 1'] = addr['street1']
+            if addr.get('street2'):
+                address_fields['Address Line 2'] = addr['street2']
+            if addr.get('city'):
+                address_fields['City'] = addr['city']
+            if addr.get('state_code'):
+                address_fields['State'] = addr['state_code']
+            if addr.get('zip_code'):
+                address_fields['Zip Code'] = addr['zip_code']
+            phone = addr.get('phone') or addr.get('phone_secondary') or customer.get('phone', '')
+            if phone:
+                address_fields['Phone'] = phone
+
             # Merge line items with the same SKU (each order is for one student,
             # so duplicate SKUs mean multiple months/units of the same product)
             merged = {}
@@ -177,7 +195,7 @@ def sync_orders():
                 sku = line.get('offer_sku', '')
                 quantity = int(line.get('quantity', 1))
                 amount = float(line.get('total_price', line.get('price', 0)))
-                title = line.get('offer_title', '')
+                title = line.get('product_title', '')
                 if sku in merged:
                     merged[sku]['quantity'] += quantity
                     merged[sku]['amount'] += amount
@@ -199,6 +217,7 @@ def sync_orders():
                     'Child Name': customer_name,
                     'Parent Email': customer_email,
                     'Mirakl': mirakl_status,
+                    **address_fields,
                 }
                 if sku_type:
                     fields['Type'] = [sku_type]  # Multi-select requires a list
@@ -218,6 +237,18 @@ def sync_orders():
                 new_count += 1
 
         print(f"Done. {new_count} new line item(s) added to Airtable.")
+
+        # Alert on orders approaching the 5-day auto-cancel deadline
+        alert_threshold = str(date.today() - timedelta(days=3))
+        at_risk = [o for o in orders if o.get('created_date', '')[:10] <= alert_threshold]
+        if at_risk:
+            ids = '\n'.join(o.get('order_id', '') for o in at_risk)
+            send_error_email(
+                "Mirakl Orders Approaching Auto-Cancel Deadline",
+                f"The following orders have been in WAITING_ACCEPTANCE for 3+ days "
+                f"and will auto-cancel after 5 days if not confirmed:\n\n{ids}\n\n"
+                f"Please confirm or reject them as soon as possible."
+            )
 
     except Exception as e:
         msg = f"sync_orders.py failed: {e}"
