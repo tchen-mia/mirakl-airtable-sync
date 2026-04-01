@@ -166,7 +166,7 @@ def sync_orders():
                     'Mirakl': mirakl_status,
                 }
                 if sku_type:
-                    fields['Type'] = sku_type
+                    fields['Type'] = [sku_type]  # Multi-select requires a list
                 if duration:
                     fields['Duration'] = duration
                 if site:
