@@ -134,9 +134,9 @@ def add_tracking_in_mirakl(order_id, tracking_number):
         'Content-Type': 'application/json'
     }
     body = {
-        'carrier_code': 'FEDEX',
+        'carrier_code': 'fedex',
         'carrier_name': 'FedEx',
-        'carrier_standard_code': 'FEDEX',
+        'carrier_standard_code': 'fedex',
         'carrier_url': 'https://www.fedex.com',
         'tracking_number': tracking_number
     }
