@@ -112,7 +112,7 @@ def accept_order_in_mirakl(order_id):
     }
     body = {
         'order_lines': [
-            {'id': line_id, 'acceptance': {'status': 'ACCEPTED'}}
+            {'id': line_id, 'acceptance': 'ACCEPTED'}
             for line_id in line_ids
         ]
     }
