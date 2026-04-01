@@ -148,11 +148,22 @@ def sync_orders():
             customer_name = f"{customer.get('firstname', '')} {customer.get('lastname', '')}".strip()
             customer_email = customer.get('email', '')
 
+            # Merge line items with the same SKU (each order is for one student,
+            # so duplicate SKUs mean multiple months/units of the same product)
+            merged = {}
             for line in order.get('order_lines', []):
                 sku = line.get('offer_sku', '')
                 quantity = int(line.get('quantity', 1))
-                # Use the line's total price (unit price × quantity)
                 amount = float(line.get('total_price', line.get('price', 0)))
+                if sku in merged:
+                    merged[sku]['quantity'] += quantity
+                    merged[sku]['amount'] += amount
+                else:
+                    merged[sku] = {'quantity': quantity, 'amount': amount}
+
+            for sku, data in merged.items():
+                quantity = data['quantity']
+                amount = data['amount']
 
                 sku_type, duration, site, needs_review = map_sku(sku, quantity)
                 mirakl_status = 'New - Review' if needs_review else 'New'
