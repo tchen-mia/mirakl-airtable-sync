@@ -97,8 +97,7 @@ def get_order_line_ids(order_id):
     if not orders:
         raise Exception(f"Order {order_id} not found in Mirakl")
     order_lines = orders[0].get('order_lines', [])
-    print(f"Order line keys: {list(order_lines[0].keys()) if order_lines else 'no lines'}")
-    return [line['id'] for line in order_lines]
+    return [line['order_line_id'] for line in order_lines]
 
 
 def accept_order_in_mirakl(order_id):
