@@ -124,6 +124,9 @@ def create_airtable_record(fields):
     }
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
     response = requests.post(url, headers=headers, json={'fields': fields}, timeout=30)
+    if not response.ok:
+        print(f"Airtable error {response.status_code}: {response.text}")
+        print(f"Fields sent: {fields}")
     response.raise_for_status()
 
 
