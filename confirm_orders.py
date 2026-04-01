@@ -57,6 +57,30 @@ def get_records_to_confirm():
     return records
 
 
+def get_all_records_for_order(order_id):
+    """Fetch all Airtable records for a given order ID, regardless of Mirakl status."""
+    headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
+    params = {
+        'filterByFormula': f"{{Ariba Invoice #}} = '{order_id}'",
+        'fields[]': ['Ariba Invoice #', 'Mirakl'],
+        'pageSize': 100
+    }
+    records = []
+
+    while True:
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        records.extend(data.get('records', []))
+        offset = data.get('offset')
+        if not offset:
+            break
+        params['offset'] = offset
+
+    return records
+
+
 def accept_order_in_mirakl(order_id):
     """Call Mirakl API to accept an order."""
     headers = {'Authorization': MIRAKL_API_KEY}
@@ -96,14 +120,15 @@ def confirm_orders():
 
         confirmed_count = 0
 
-        for order_id, record_ids in order_to_records.items():
+        for order_id in order_to_records.keys():
             try:
                 accept_order_in_mirakl(order_id)
-                # Update all Airtable rows for this order to 'Confirmed'
-                for record_id in record_ids:
-                    update_airtable_record(record_id, {'Mirakl': 'Confirmed'})
+                # Update ALL rows for this order (not just the one set to Confirm)
+                all_records = get_all_records_for_order(order_id)
+                for record in all_records:
+                    update_airtable_record(record['id'], {'Mirakl': 'Confirmed'})
                 confirmed_count += 1
-                print(f"Confirmed order {order_id}")
+                print(f"Confirmed order {order_id} ({len(all_records)} row(s) updated)")
             except Exception as e:
                 # Log and continue — don't let one failed order block the rest
                 print(f"Failed to confirm order {order_id}: {e}")
