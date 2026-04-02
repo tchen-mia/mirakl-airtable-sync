@@ -79,8 +79,8 @@ def get_existing_order_ids():
         response = requests.get(url, headers=headers, params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
-        for record in data.get('records', []):
-            order_id = record.get('fields', {}).get('Ariba Invoice #')
+        for record in data.get('records') or []:
+            order_id = (record.get('fields') or {}).get('Ariba Invoice #')
             if order_id:
                 existing.add(order_id)
         offset = data.get('offset')
@@ -128,8 +128,8 @@ def get_workbook_map():
         response = requests.get(url, headers=headers, params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
-        for record in data.get('records', []):
-            name = record.get('fields', {}).get('Name', '')
+        for record in data.get('records') or []:
+            name = (record.get('fields') or {}).get('Name', '')
             if name:
                 workbook_map[name.lower()] = record['id']
         offset = data.get('offset')
@@ -165,14 +165,14 @@ def sync_orders():
                 continue
 
             # Parse order date (Mirakl returns ISO 8601, Airtable expects YYYY-MM-DD)
-            created_date = order.get('created_date', '')[:10]
+            created_date = (order.get('created_date') or '')[:10]
 
-            customer = order.get('customer', {})
+            customer = order.get('customer') or {}
             customer_name = f"{customer.get('firstname', '')} {customer.get('lastname', '')}".strip()
             customer_email = customer.get('email', '')
 
             # Shipping address (available at WAITING_ACCEPTANCE)
-            addr = customer.get('shipping_address', {})
+            addr = customer.get('shipping_address') or {}
             address_fields = {}
             if addr.get('street1'):
                 address_fields['Address Line 1'] = addr['street1']
@@ -191,11 +191,11 @@ def sync_orders():
             # Merge line items with the same SKU (each order is for one student,
             # so duplicate SKUs mean multiple months/units of the same product)
             merged = {}
-            for line in order.get('order_lines', []):
-                sku = line.get('offer_sku', '')
-                quantity = int(line.get('quantity', 1))
-                amount = float(line.get('total_price', line.get('price', 0)))
-                title = line.get('product_title', '')
+            for line in order.get('order_lines') or []:
+                sku = line.get('offer_sku') or ''
+                quantity = int(line.get('quantity') or 1)
+                amount = float(line.get('total_price') or line.get('price') or 0)
+                title = line.get('product_title') or ''
                 if sku in merged:
                     merged[sku]['quantity'] += quantity
                     merged[sku]['amount'] += amount
@@ -240,7 +240,7 @@ def sync_orders():
 
         # Alert on orders approaching the 5-day auto-cancel deadline
         alert_threshold = str(date.today() - timedelta(days=3))
-        at_risk = [o for o in orders if o.get('created_date', '')[:10] <= alert_threshold]
+        at_risk = [o for o in orders if (o.get('created_date') or '')[:10] <= alert_threshold]
         if at_risk:
             ids = '\n'.join(o.get('order_id', '') for o in at_risk)
             send_error_email(
