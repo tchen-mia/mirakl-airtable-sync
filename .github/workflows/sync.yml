@@ -1,14 +1,12 @@
 name: Mirakl Order Sync
 
 on:
-  schedule:
-    # TESTING: every hour
-    - cron: '0 * * * *'
-    # PRODUCTION: uncomment the 3 lines below and remove the line above
-    # - cron: '*/5 11-23 * * *'  # Every 5 min, business hours (7am-11pm ET)
-    # - cron: '*/5 0-3 * * *'    # Every 5 min, business hours continued
-    # - cron: '0 4-10 * * *'     # Every hour, outside business hours
-  workflow_dispatch: # Allow manual trigger from GitHub Actions tab
+  # PRODUCTION: uncomment the schedule block below when going live
+  # schedule:
+  #   - cron: '*/5 11-23 * * *'  # Every 5 min, business hours (7am-11pm ET)
+  #   - cron: '*/5 0-3 * * *'    # Every 5 min, business hours continued
+  #   - cron: '0 4-10 * * *'     # Every hour, outside business hours
+  workflow_dispatch: # Manual trigger only during testing
 
 jobs:
   sync-orders:
