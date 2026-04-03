@@ -94,29 +94,29 @@ def get_existing_order_ids():
 
 def map_sku(sku, quantity):
     """
-    Return (type, duration, site, needs_review) for a given SKU and quantity.
+    Return (type, duration, site, needs_review, review_reason) for a given SKU and quantity.
     needs_review=True flags rows the script couldn't fully map.
     """
     if sku.startswith('BOOK'):
-        return ('Book', None, None, False)
+        return ('Book', None, None, False, None)
 
     if sku not in SKU_MAP:
-        return (None, None, None, True)
+        return (None, None, None, True, f'Unknown SKU: {sku}')
 
     info = SKU_MAP[sku]
     sku_type = info['type']
     site = info['site']
 
     if 'duration' in info:
-        return (sku_type, info['duration'], site, False)
+        return (sku_type, info['duration'], site, False, None)
 
     total_months = info['months_per_unit'] * quantity
     candidate = f"{total_months}-month"
     if candidate in VALID_DURATIONS:
-        return (sku_type, candidate, site, False)
+        return (sku_type, candidate, site, False, None)
 
     # Duration exists but not in the Airtable dropdown (e.g. 13-month)
-    return (sku_type, None, site, True)
+    return (sku_type, None, site, True, f'Duration {total_months}-month not in Airtable dropdown')
 
 
 def get_workbook_map():
@@ -266,7 +266,7 @@ def sync_orders():
                 amount = data['amount']
                 title = data.get('title', '')
 
-                sku_type, duration, site, needs_review = map_sku(sku, quantity)
+                sku_type, duration, site, needs_review, review_reason = map_sku(sku, quantity)
 
                 # Only match workbooks for Book-type items
                 workbook_id = None
@@ -275,6 +275,7 @@ def sync_orders():
                     if not workbook_id:
                         print(f"Order {order_id}: no Workbooks match for book {title!r}")
                         needs_review = True
+                        review_reason = f"Workbook not matched: '{title}'"
 
                 if needs_review:
                     any_needs_review = True
@@ -286,6 +287,7 @@ def sync_orders():
                     'duration': duration,
                     'site': site,
                     'needs_review': needs_review,
+                    'review_reason': review_reason,
                     'workbook_id': workbook_id,
                 })
 
@@ -310,24 +312,24 @@ def sync_orders():
                     fields['Site'] = item['site']
                 if item['workbook_id']:
                     fields['Workbooks'] = [item['workbook_id']]
+                if item.get('review_reason'):
+                    fields['Automation Log'] = item['review_reason']
 
                 record_id = create_airtable_record(fields)
                 created_record_ids.append(record_id)
                 new_count += 1
 
-            # Auto-confirm in Mirakl if all line items mapped cleanly
+            # Auto-accept in Mirakl if all line items mapped cleanly
             if not any_needs_review and created_record_ids:
                 try:
                     accept_order_in_mirakl(order_id)
-                    for record_id in created_record_ids:
-                        update_airtable_record(record_id, {'Mirakl': 'Confirmed'})
                     auto_confirmed_ids.add(order_id)
-                    print(f"Order {order_id} auto-confirmed in Mirakl")
+                    print(f"Order {order_id} auto-accepted in Mirakl")
                 except Exception as e:
-                    print(f"Auto-confirm failed for order {order_id}: {e}")
+                    print(f"Auto-accept failed for order {order_id}: {e}")
                     send_error_email(
-                        f"Mirakl Auto-Confirm Error: {order_id}",
-                        f"Order {order_id} was synced to Airtable but could not be auto-confirmed in Mirakl.\n\nError: {e}\n\nPlease confirm it manually."
+                        f"Mirakl Auto-Accept Error: {order_id}",
+                        f"Order {order_id} was synced to Airtable but could not be auto-accepted in Mirakl.\n\nError: {e}\n\nThe order is in Airtable with status 'New'. Set it to 'Order' when ready and the system will retry acceptance automatically."
                     )
 
         print(f"Done. {new_count} new line item(s) added to Airtable.")
