@@ -33,31 +33,6 @@ jobs:
           ERROR_EMAIL_TO: ${{ secrets.ERROR_EMAIL_TO }}
         run: python sync_orders.py
 
-  confirm-orders:
-    name: Confirm approved orders in Mirakl
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Run confirm
-        env:
-          MIRAKL_API_URL: ${{ secrets.MIRAKL_API_URL }}
-          MIRAKL_API_KEY: ${{ secrets.MIRAKL_API_KEY }}
-          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
-          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
-          AIRTABLE_TABLE_NAME: ${{ secrets.AIRTABLE_TABLE_NAME }}
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          SMTP_FROM_STATEFUNDING: ${{ secrets.SMTP_FROM_STATEFUNDING }}
-          ERROR_EMAIL_TO: ${{ secrets.ERROR_EMAIL_TO }}
-        run: python confirm_orders.py
-
   shopify-orders:
     name: Create Shopify orders and poll for tracking
     runs-on: ubuntu-latest
@@ -75,10 +50,13 @@ jobs:
           AIRTABLE_TABLE_NAME: ${{ secrets.AIRTABLE_TABLE_NAME }}
           SHOPIFY_STORE_URL: ${{ secrets.SHOPIFY_STORE_URL }}
           SHOPIFY_API_TOKEN: ${{ secrets.SHOPIFY_API_TOKEN }}
+          MIRAKL_API_URL: ${{ secrets.MIRAKL_API_URL }}
+          MIRAKL_API_KEY: ${{ secrets.MIRAKL_API_KEY }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           SMTP_FROM_BOOKS: ${{ secrets.SMTP_FROM_BOOKS }}
+          SMTP_FROM_STATEFUNDING: ${{ secrets.SMTP_FROM_STATEFUNDING }}
           ERROR_EMAIL_TO: ${{ secrets.ERROR_EMAIL_TO }}
         run: python shopify_orders.py
