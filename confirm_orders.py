@@ -72,12 +72,16 @@ def update_all_records_for_order(order_id, fields):
         update_airtable_record(record['id'], fields)
 
 
-def order_has_books(order_id):
-    """Return True if any line item in the order has Type = Book."""
+# Types that require a manually entered tracking number before shipping
+MANUAL_TRACKING_TYPES = {'Book', 'SuperTeacher'}
+
+
+def order_needs_manual_tracking(order_id):
+    """Return True if any line item requires a manually entered tracking number."""
     all_records = get_airtable_records(f"{{Ariba Invoice #}} = '{order_id}'")
     for record in all_records:
         type_value = record.get('fields', {}).get('Type', [])
-        if isinstance(type_value, list) and 'Book' in type_value:
+        if isinstance(type_value, list) and MANUAL_TRACKING_TYPES & set(type_value):
             return True
     return False
 
@@ -258,7 +262,7 @@ def ship_orders():
 
         for order_id, tracking_number in order_to_tracking.items():
             if not tracking_number:
-                if order_has_books(order_id):
+                if order_needs_manual_tracking(order_id):
                     print(f"Order {order_id} has no tracking number — skipping")
                     continue
                 # Digital order — auto-generate tracking number
