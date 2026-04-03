@@ -18,14 +18,15 @@ ERROR_EMAIL_TO = os.environ.get('ERROR_EMAIL_TO', '')
 # Maps each SKU to its Type, Site, and how many months one unit represents.
 # 'duration' is used for fixed durations (e.g. lifetime) instead of calculating from quantity.
 SKU_MAP = {
-    'MIA1MO':   {'type': 'Monthly', 'site': 'MIA', 'months_per_unit': 1},
-    'MIA12MO':  {'type': 'Annual',  'site': 'MIA', 'months_per_unit': 12},
-    'MIALIFE':  {'type': 'IndLife', 'site': 'MIA', 'duration': 'lifetime'},
-    'MP1MO':    {'type': 'Monthly', 'site': 'MP',  'months_per_unit': 1},
-    'MP12MO':   {'type': 'Annual',  'site': 'MP',  'months_per_unit': 12},
-    'MPLIFE':   {'type': 'IndLife', 'site': 'MP',  'duration': 'lifetime'},
-    'MPPMP1MO': {'type': 'Monthly', 'site': 'MP+', 'months_per_unit': 1},
-    'MPP1MO':   {'type': 'Monthly', 'site': 'MP+', 'months_per_unit': 1},
+    'MIA1MO':   {'type': 'Monthly',      'site': 'MIA', 'months_per_unit': 1},
+    'MIA12MO':  {'type': 'Annual',       'site': 'MIA', 'months_per_unit': 12},
+    'MIALIFE':  {'type': 'IndLife',      'site': 'MIA', 'duration': 'lifetime'},
+    'MP1MO':    {'type': 'Monthly',      'site': 'MP',  'months_per_unit': 1},
+    'MP12MO':   {'type': 'Annual',       'site': 'MP',  'months_per_unit': 12},
+    'MPLIFE':   {'type': 'IndLife',      'site': 'MP',  'duration': 'lifetime'},
+    'MPPMP1MO': {'type': 'Monthly',      'site': 'MP+', 'months_per_unit': 1},
+    'MPP1MO':   {'type': 'Monthly',      'site': 'MP+', 'months_per_unit': 1},
+    'ST12MO':   {'type': 'SuperTeacher', 'site': None,  'months_per_unit': 12},
 }
 
 # All valid Duration options in Airtable
