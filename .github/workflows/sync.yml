@@ -54,6 +54,7 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM_STATEFUNDING: ${{ secrets.SMTP_FROM_STATEFUNDING }}
           ERROR_EMAIL_TO: ${{ secrets.ERROR_EMAIL_TO }}
         run: python confirm_orders.py
 
@@ -78,5 +79,6 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM_BOOKS: ${{ secrets.SMTP_FROM_BOOKS }}
           ERROR_EMAIL_TO: ${{ secrets.ERROR_EMAIL_TO }}
         run: python shopify_orders.py

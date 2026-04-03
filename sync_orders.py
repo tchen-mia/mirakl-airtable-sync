@@ -141,6 +141,7 @@ def get_workbook_map():
 
 
 def create_airtable_record(fields):
+    """Create an Airtable record and return its record ID."""
     headers = {
         'Authorization': f'Bearer {AIRTABLE_API_KEY}',
         'Content-Type': 'application/json'
@@ -151,6 +152,59 @@ def create_airtable_record(fields):
         print(f"Airtable error {response.status_code}: {response.text}")
         print(f"Fields sent: {fields}")
     response.raise_for_status()
+    return response.json()['id']
+
+
+def update_airtable_record(record_id, fields):
+    headers = {
+        'Authorization': f'Bearer {AIRTABLE_API_KEY}',
+        'Content-Type': 'application/json'
+    }
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}/{record_id}"
+    response = requests.patch(url, headers=headers, json={'fields': fields}, timeout=30)
+    response.raise_for_status()
+
+
+def get_order_line_ids(order_id):
+    """Fetch order from Mirakl and return its line IDs."""
+    headers = {'Authorization': MIRAKL_API_KEY}
+    response = requests.get(
+        f"{MIRAKL_API_URL}/api/orders",
+        headers=headers,
+        params={'order_ids': order_id},
+        timeout=30
+    )
+    response.raise_for_status()
+    orders = response.json().get('orders', [])
+    if not orders:
+        raise Exception(f"Order {order_id} not found in Mirakl")
+    return [line['order_line_id'] for line in orders[0].get('order_lines', [])]
+
+
+def accept_order_in_mirakl(order_id):
+    """Accept all order lines via Mirakl OR21."""
+    line_ids = get_order_line_ids(order_id)
+    if not line_ids:
+        raise Exception(f"No order lines found for order {order_id}")
+    headers = {
+        'Authorization': MIRAKL_API_KEY,
+        'Content-Type': 'application/json'
+    }
+    body = {
+        'order_lines': [
+            {'id': line_id, 'accepted': True}
+            for line_id in line_ids
+        ]
+    }
+    response = requests.put(
+        f"{MIRAKL_API_URL}/api/orders/{order_id}/accept",
+        headers=headers,
+        json=body,
+        timeout=30
+    )
+    if not response.ok:
+        print(f"Mirakl accept error {response.status_code}: {response.text}")
+    response.raise_for_status()
 
 
 def sync_orders():
@@ -159,6 +213,7 @@ def sync_orders():
         orders = get_mirakl_orders()
         workbook_map = get_workbook_map()
         new_count = 0
+        auto_confirmed_ids = set()
 
         for order in orders:
             order_id = order.get('order_id')
@@ -203,45 +258,87 @@ def sync_orders():
                 else:
                     merged[sku] = {'quantity': quantity, 'amount': amount, 'title': title}
 
+            # First pass: determine if any line item needs review before creating records
+            any_needs_review = False
+            processed_items = []
             for sku, data in merged.items():
                 quantity = data['quantity']
                 amount = data['amount']
                 title = data.get('title', '')
 
                 sku_type, duration, site, needs_review = map_sku(sku, quantity)
-                mirakl_status = 'New - Review' if needs_review else 'New'
 
+                # Only match workbooks for Book-type items
+                workbook_id = None
+                if sku_type == 'Book':
+                    workbook_id = workbook_map.get(title.lower()) if title else None
+                    if not workbook_id:
+                        print(f"Order {order_id}: no Workbooks match for book {title!r}")
+                        needs_review = True
+
+                if needs_review:
+                    any_needs_review = True
+
+                processed_items.append({
+                    'sku': sku,
+                    'amount': amount,
+                    'sku_type': sku_type,
+                    'duration': duration,
+                    'site': site,
+                    'needs_review': needs_review,
+                    'workbook_id': workbook_id,
+                })
+
+            # Second pass: create Airtable records
+            created_record_ids = []
+            for item in processed_items:
+                mirakl_status = 'New - Review' if item['needs_review'] else 'New'
                 fields = {
                     'Ariba Invoice #': order_id,
                     'Date': created_date,
-                    'Amount': amount,
+                    'Amount': item['amount'],
                     'Child Name': customer_name,
                     'Parent Email': customer_email,
                     'Mirakl': mirakl_status,
                     **address_fields,
                 }
-                if sku_type:
-                    fields['Type'] = [sku_type]  # Multi-select requires a list
-                if duration:
-                    fields['Duration'] = duration
-                if site:
-                    fields['Site'] = site
-                if title:
-                    workbook_id = workbook_map.get(title.lower())
-                    if workbook_id:
-                        fields['Workbooks'] = [workbook_id]
-                    else:
-                        print(f"No Workbooks match found for: {title!r}")
-                        fields['Mirakl'] = 'New - Review'
+                if item['sku_type']:
+                    fields['Type'] = [item['sku_type']]
+                if item['duration']:
+                    fields['Duration'] = item['duration']
+                if item['site']:
+                    fields['Site'] = item['site']
+                if item['workbook_id']:
+                    fields['Workbooks'] = [item['workbook_id']]
 
-                create_airtable_record(fields)
+                record_id = create_airtable_record(fields)
+                created_record_ids.append(record_id)
                 new_count += 1
+
+            # Auto-confirm in Mirakl if all line items mapped cleanly
+            if not any_needs_review and created_record_ids:
+                try:
+                    accept_order_in_mirakl(order_id)
+                    for record_id in created_record_ids:
+                        update_airtable_record(record_id, {'Mirakl': 'Confirmed'})
+                    auto_confirmed_ids.add(order_id)
+                    print(f"Order {order_id} auto-confirmed in Mirakl")
+                except Exception as e:
+                    print(f"Auto-confirm failed for order {order_id}: {e}")
+                    send_error_email(
+                        f"Mirakl Auto-Confirm Error: {order_id}",
+                        f"Order {order_id} was synced to Airtable but could not be auto-confirmed in Mirakl.\n\nError: {e}\n\nPlease confirm it manually."
+                    )
 
         print(f"Done. {new_count} new line item(s) added to Airtable.")
 
-        # Alert on orders approaching the 5-day auto-cancel deadline
+        # Alert on orders still in WAITING_ACCEPTANCE for 3+ days (excludes just-confirmed orders)
         alert_threshold = str(date.today() - timedelta(days=3))
-        at_risk = [o for o in orders if (o.get('created_date') or '')[:10] <= alert_threshold]
+        at_risk = [
+            o for o in orders
+            if (o.get('created_date') or '')[:10] <= alert_threshold
+            and o.get('order_id') not in auto_confirmed_ids
+        ]
         if at_risk:
             ids = '\n'.join(o.get('order_id', '') for o in at_risk)
             send_error_email(

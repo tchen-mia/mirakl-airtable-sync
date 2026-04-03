@@ -1,6 +1,7 @@
 import os
 import requests
 import smtplib
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 MIRAKL_API_URL = os.environ['MIRAKL_API_URL']
@@ -12,6 +13,7 @@ SMTP_HOST = os.environ.get('SMTP_HOST', '')
 SMTP_PORT = int(os.environ.get('SMTP_PORT') or 587)
 SMTP_USER = os.environ.get('SMTP_USER', '')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
+SMTP_FROM_STATEFUNDING = os.environ.get('SMTP_FROM_STATEFUNDING', '') or os.environ.get('SMTP_USER', '')
 ERROR_EMAIL_TO = os.environ.get('ERROR_EMAIL_TO', '')
 
 
@@ -33,13 +35,74 @@ def send_error_email(subject, body):
         print(f"Failed to send error email: {e}")
 
 
+def send_superteacher_activation_email(to_email, order_id, child_name, activation_code):
+    """Send the SuperTeacher activation code email to the customer."""
+    if not all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD]):
+        print(f"Email not configured — skipping SuperTeacher email for order {order_id}")
+        return
+    try:
+        html = f"""
+        <div style="font-family: Arial, sans-serif; font-size: 15px; color: #222; max-width: 650px;">
+            <p>Dear Parent/Guardian,</p>
+
+            <p>We've received a 12-month Super Teacher access purchase for your student,
+            <strong>{child_name}</strong>. Thank you - we're excited to welcome your student to the app!</p>
+
+            <p>Please complete the steps below to activate your access:</p>
+
+            <ol style="line-height: 2;">
+                <li>Get Super Teacher from
+                    <a href="https://apps.apple.com/app/super-teacher/id6443491064" style="color:#1a73e8;">iOS App Store</a> or
+                    <a href="https://play.google.com/store/apps/details?id=com.getsuperteacher.superteacher" style="color:#1a73e8;">Android Play Store</a>
+                    and open the app, or visit
+                    <a href="https://superteacherapp.com" style="color:#1a73e8;">superteacherapp.com</a>.
+                </li>
+                <li>Tap the profile icon at the top right, then tap <strong>Upgrade</strong>.</li>
+                <li>Create an account or log in to your existing Super Teacher account.</li>
+                <li>Enter the confirmation code sent to your email.</li>
+                <li>In the final step, instead of paying, tap <strong>Enter code</strong> at the top right,
+                and choose &ldquo;School code&rdquo;. Then enter your personal one-time-use school code:
+                <strong style="background-color:#FFD700; padding:2px 6px;">{activation_code}</strong></li>
+            </ol>
+
+            <p>If you have any questions while using the app, tap the profile icon at the top right,
+            and tap &ldquo;For parents&rdquo; to access the &ldquo;Help and FAQ&rdquo; section.
+            Alternatively, you may also email
+            <a href="mailto:support@getsuperteacher.com" style="color:#1a73e8;">support@getsuperteacher.com</a>,
+            and their team will get back to you within 1-3 business days.</p>
+
+            <p>Thank you for your kind support. Have a great day!</p>
+
+            <p>Warm Regards,<br><strong>Miaplaza Team</strong></p>
+        </div>
+        """
+
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = f"Action Needed: Your Super Teacher App Purchase from Step Up MyScholarShop"
+        msg['From'] = f"State Funding Programs <{SMTP_FROM_STATEFUNDING}>"
+        msg['To'] = to_email
+        msg.attach(MIMEText(html, 'html'))
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+        print(f"SuperTeacher activation email sent to {to_email} for order {order_id}")
+    except Exception as e:
+        print(f"Failed to send SuperTeacher email for order {order_id}: {e}")
+        send_error_email(
+            f"SuperTeacher Email Failed: Order {order_id}",
+            f"Could not send activation code email for order {order_id} to {to_email}.\n\nActivation code: {activation_code}\n\nError: {e}"
+        )
+
+
 def get_airtable_records(filter_formula):
     """Fetch Airtable records matching a filter formula."""
     headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
     params = {
         'filterByFormula': filter_formula,
-        'fields[]': ['Ariba Invoice #', 'Mirakl', 'Type', 'Tracking Number', 'Site'],
+        'fields[]': ['Ariba Invoice #', 'Mirakl', 'Type', 'Tracking Number', 'Site', 'Parent Email', 'Child Name'],
         'pageSize': 100
     }
     records = []
@@ -108,7 +171,6 @@ def get_order_line_ids(order_id):
     """Fetch order from Mirakl and return its line IDs."""
     order = get_order_from_mirakl(order_id)
     return [line['order_line_id'] for line in order.get('order_lines', [])]
-
 
 
 def accept_order_in_mirakl(order_id):
@@ -181,9 +243,8 @@ def ship_order_in_mirakl(order_id):
 
 def confirm_orders():
     """
-    Handle Confirm → Confirmed for all orders.
-    Accepts the order in Mirakl and stores the shipping address in Airtable.
-    CS team then sets Mirakl = Ship when ready (book orders require a tracking number).
+    Handle Confirm → Confirmed for orders flagged New - Review that CS has manually approved.
+    Clean orders are auto-confirmed at sync time; this handles the review exceptions.
     """
     try:
         records = get_airtable_records("{Mirakl} = 'Confirm'")
@@ -202,7 +263,6 @@ def confirm_orders():
         for order_id in order_ids:
             try:
                 accept_order_in_mirakl(order_id)
-
                 update_all_records_for_order(order_id, {'Mirakl': 'Confirmed'})
                 print(f"Order {order_id} confirmed — set Mirakl to Ship when ready")
                 confirmed_count += 1
@@ -233,15 +293,16 @@ def get_site_prefix_for_order(order_id):
         site = record.get('fields', {}).get('Site', '')
         if site in SITE_PREFIX:
             return SITE_PREFIX[site]
-    return 'DIGITAL'  # fallback if site is missing
+    return 'DIGITAL'
 
 
 def ship_orders():
     """
     Handle Ship → Shipped for all orders.
-    CS team sets Mirakl = Ship (and enters a tracking number for book orders).
+    CS team sets Mirakl = Ship (and enters a tracking number for book/SuperTeacher orders).
     Digital orders auto-generate a tracking number if none is provided.
-    Script calls OR23 (tracking) + OR24 (ship) and updates status to Shipped.
+    Script calls OR23 (tracking) + OR24 (ship), updates status to Shipped,
+    and sends the activation code email for SuperTeacher orders.
     """
     try:
         records = get_airtable_records("{Mirakl} = 'Ship'")
@@ -249,14 +310,26 @@ def ship_orders():
             print("No orders to ship.")
             return
 
+        # Collect tracking numbers and order metadata per order ID
         order_to_tracking = {}
+        order_metadata = {}
         for record in records:
-            order_id = record.get('fields', {}).get('Ariba Invoice #')
-            tracking = record.get('fields', {}).get('Tracking Number', '').strip()
+            f = record.get('fields', {})
+            order_id = f.get('Ariba Invoice #')
+            tracking = (f.get('Tracking Number') or '').strip()
             if order_id and tracking:
                 order_to_tracking[order_id] = tracking
             elif order_id and order_id not in order_to_tracking:
                 order_to_tracking[order_id] = None
+            if order_id and order_id not in order_metadata:
+                order_metadata[order_id] = {
+                    'email': f.get('Parent Email', ''),
+                    'child_name': f.get('Child Name', ''),
+                    'types': set(),
+                }
+            if order_id:
+                for t in (f.get('Type') or []):
+                    order_metadata[order_id]['types'].add(t)
 
         shipped_count = 0
 
@@ -274,6 +347,17 @@ def ship_orders():
                 update_all_records_for_order(order_id, {'Mirakl': 'Shipped', 'Tracking Number': tracking_number})
                 shipped_count += 1
                 print(f"Shipped order {order_id} (tracking: {tracking_number})")
+
+                # Send activation code email for SuperTeacher orders
+                meta = order_metadata.get(order_id, {})
+                if 'SuperTeacher' in meta.get('types', set()):
+                    send_superteacher_activation_email(
+                        to_email=meta['email'],
+                        order_id=order_id,
+                        child_name=meta['child_name'],
+                        activation_code=tracking_number,
+                    )
+
             except Exception as e:
                 print(f"Failed to ship order {order_id}: {e}")
                 send_error_email(

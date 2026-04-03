@@ -1,6 +1,7 @@
 import os
 import requests
 import smtplib
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 AIRTABLE_API_KEY = os.environ['AIRTABLE_API_KEY']
@@ -12,6 +13,8 @@ SMTP_HOST = os.environ.get('SMTP_HOST', '')
 SMTP_PORT = int(os.environ.get('SMTP_PORT') or 587)
 SMTP_USER = os.environ.get('SMTP_USER', '')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
+SMTP_FROM_BOOKS = os.environ.get('SMTP_FROM_BOOKS', '') or os.environ.get('SMTP_USER', '')
+SMTP_FROM_STATEFUNDING = os.environ.get('SMTP_FROM_STATEFUNDING', '') or os.environ.get('SMTP_USER', '')
 ERROR_EMAIL_TO = os.environ.get('ERROR_EMAIL_TO', '')
 
 SHOPIFY_API_VERSION = '2024-01'
@@ -24,7 +27,7 @@ def send_error_email(subject, body):
     try:
         msg = MIMEText(body)
         msg['Subject'] = subject
-        msg['From'] = SMTP_USER
+        msg['From'] = SMTP_FROM
         msg['To'] = ERROR_EMAIL_TO
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
             server.starttls()
@@ -33,6 +36,62 @@ def send_error_email(subject, body):
         print(f"Error email sent to {ERROR_EMAIL_TO}")
     except Exception as e:
         print(f"Failed to send error email: {e}")
+
+
+def send_order_confirmation_email(to_email, order_id, workbook_names, child_name, address_line1, address_line2, city, state, zip_code, phone):
+    if not all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD]):
+        print(f"Email not configured — skipping confirmation email for order {order_id}")
+        return
+    try:
+        address_parts = [address_line1]
+        if address_line2:
+            address_parts.append(address_line2)
+        address_parts.append(f"{city}, {state} {zip_code}".strip())
+        mailing_address = ', '.join(p for p in address_parts if p)
+
+        order_items_html = '\n'.join(
+            f'<li><strong>{name}</strong> (Quantity = 1)</li>'
+            for name in workbook_names
+        )
+
+        html = f"""
+        <div style="font-family: Arial, sans-serif; font-size: 15px; color: #222; max-width: 650px;">
+            <p>Hi,</p>
+
+            <p>We are happy to inform you that your workbook purchase order has been successfully processed.
+            Thank you for your purchase!</p>
+
+            <p>Below are the order details for your reference:</p>
+
+            <ul style="line-height: 2;">
+                {order_items_html}
+                <li>Recipient full name: <strong>{child_name}</strong></li>
+                <li>Recipient mailing address: <strong>{mailing_address}</strong></li>
+                <li>Recipient phone number: <strong>{phone}</strong></li>
+            </ul>
+
+            <p>Once your workbooks are on the way, the tracking number will be emailed to you.
+            Please allow approximately 2 weeks for delivery.</p>
+
+            <p>We sincerely appreciate your patience and support. Have a great day!</p>
+
+            <p>Warm Regards,<br><strong>Miaplaza Workbooks Team</strong></p>
+        </div>
+        """
+
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = f"Your Workbook Order ({order_id}) Has Been Processed"
+        msg['From'] = f"Miaplaza Workbooks <{SMTP_FROM_BOOKS}>"
+        msg['To'] = to_email
+        msg.attach(MIMEText(html, 'html'))
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+        print(f"Confirmation email sent to {to_email} for order {order_id}")
+    except Exception as e:
+        print(f"Failed to send confirmation email for order {order_id}: {e}")
 
 
 def get_shopify_barcode_map():
@@ -50,23 +109,22 @@ def get_shopify_barcode_map():
                 barcode = (variant.get('barcode') or '').strip()
                 if barcode:
                     barcode_map[barcode.lower()] = variant['id']
-        # Shopify pagination via Link header
         next_url = None
         for part in response.headers.get('Link', '').split(','):
             if 'rel="next"' in part:
                 next_url = part.split(';')[0].strip().strip('<>')
                 break
         url = next_url
-        params = {}  # next_url already includes params
+        params = {}
 
     return barcode_map
 
 
-def get_workbook_barcode_map():
-    """Return dict: Airtable Workbooks record ID → barcode."""
+def get_workbook_map():
+    """Return dict: Airtable Workbooks record ID → {barcode, name}."""
     headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Workbooks"
-    params = {'fields[]': ['Barcode'], 'pageSize': 100}
+    params = {'fields[]': ['Barcode', 'Name'], 'pageSize': 100}
     record_map = {}
 
     while True:
@@ -74,9 +132,10 @@ def get_workbook_barcode_map():
         response.raise_for_status()
         data = response.json()
         for record in data.get('records', []):
-            barcode = (record.get('fields', {}).get('Barcode') or '').strip()
-            if barcode:
-                record_map[record['id']] = barcode
+            fields = record.get('fields') or {}
+            barcode = (fields.get('Barcode') or '').strip()
+            name = (fields.get('Name') or '').strip()
+            record_map[record['id']] = {'barcode': barcode, 'name': name}
         offset = data.get('offset')
         if not offset:
             break
@@ -161,17 +220,17 @@ def create_shopify_orders():
         # Group records by order ID, collecting all linked workbook record IDs
         orders = {}
         for record in records:
-            f = record.get('fields', {})
+            f = record.get('fields') or {}
             order_id = f.get('Ariba Invoice #')
             if not order_id:
                 continue
             if order_id not in orders:
                 orders[order_id] = {'fields': f, 'workbook_record_ids': set()}
-            for wb_id in f.get('Workbooks', []):
+            for wb_id in f.get('Workbooks') or []:
                 orders[order_id]['workbook_record_ids'].add(wb_id)
 
-        barcode_map = get_shopify_barcode_map()    # barcode → Shopify variant ID
-        workbook_map = get_workbook_barcode_map()  # Airtable record ID → barcode
+        barcode_map = get_shopify_barcode_map()  # barcode → Shopify variant ID
+        workbook_map = get_workbook_map()         # Airtable record ID → {barcode, name}
 
         created_count = 0
 
@@ -179,10 +238,13 @@ def create_shopify_orders():
             try:
                 f = order_data['fields']
 
-                # Build Shopify line items from linked workbooks
+                # Build Shopify line items and collect workbook names for confirmation email
                 line_items = []
+                workbook_names = []
                 for wb_record_id in order_data['workbook_record_ids']:
-                    barcode = workbook_map.get(wb_record_id, '').lower()
+                    wb_info = workbook_map.get(wb_record_id, {})
+                    barcode = wb_info.get('barcode', '').lower()
+                    name = wb_info.get('name', '')
                     if not barcode:
                         print(f"Order {order_id}: workbook {wb_record_id} has no barcode — skipping item")
                         continue
@@ -191,13 +253,15 @@ def create_shopify_orders():
                         print(f"Order {order_id}: barcode {barcode!r} not found in Shopify — skipping item")
                         continue
                     line_items.append({'variant_id': variant_id, 'quantity': 1})
+                    if name:
+                        workbook_names.append(name)
 
                 if not line_items:
                     print(f"Order {order_id}: no Shopify items found — skipping")
                     continue
 
                 # Build shipping address (split Child Name into first/last)
-                name_parts = f.get('Child Name', '').split(' ', 1)
+                name_parts = (f.get('Child Name') or '').split(' ', 1)
                 shipping_address = {
                     'first_name': name_parts[0] if name_parts else '',
                     'last_name': name_parts[1] if len(name_parts) > 1 else '',
@@ -220,6 +284,21 @@ def create_shopify_orders():
                     'Shopify Order ID': shopify_order_id,
                 })
                 print(f"Order {order_id} → Shopify order {shopify_order_id}")
+
+                # Send confirmation email to customer
+                send_order_confirmation_email(
+                    to_email=f.get('Parent Email', ''),
+                    order_id=order_id,
+                    workbook_names=workbook_names,
+                    child_name=f.get('Child Name', ''),
+                    address_line1=f.get('Address Line 1', ''),
+                    address_line2=f.get('Address Line 2', ''),
+                    city=f.get('City', ''),
+                    state=f.get('State', ''),
+                    zip_code=f.get('Zip Code', ''),
+                    phone=f.get('Phone', ''),
+                )
+
                 created_count += 1
 
             except Exception as e:
@@ -248,11 +327,10 @@ def poll_shopify_tracking():
         if not records:
             return
 
-        # Collect unique Shopify order IDs
         seen = set()
         shopify_to_mirakl = {}
         for record in records:
-            f = record.get('fields', {})
+            f = record.get('fields') or {}
             mirakl_order_id = f.get('Ariba Invoice #')
             shopify_order_id = (f.get('Shopify Order ID') or '').strip()
             if mirakl_order_id and shopify_order_id and shopify_order_id not in seen:
