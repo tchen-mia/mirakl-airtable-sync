@@ -44,7 +44,7 @@ def send_error_email(subject, body):
         print(f"Failed to send error email: {e}")
 
 
-def send_order_confirmation_email(to_email, order_id, workbook_names, child_name,
+def send_order_confirmation_email(to_email, order_id, workbook_items, child_name,
                                    address_line1, address_line2, city, state, zip_code, phone):
     if not all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD]):
         print(f"Email not configured — skipping confirmation email for order {order_id}")
@@ -57,8 +57,8 @@ def send_order_confirmation_email(to_email, order_id, workbook_names, child_name
         mailing_address = ', '.join(p for p in address_parts if p)
 
         order_items_html = '\n'.join(
-            f'<li><strong>{name}</strong> (Quantity = 1)</li>'
-            for name in workbook_names
+            f'<li><strong>{name}</strong> (Quantity = {qty})</li>'
+            for name, qty in workbook_items
         )
 
         html = f"""
@@ -389,7 +389,7 @@ def process_orders():
         records = get_airtable_records(
             "{Mirakl} = 'Order'",
             fields=[
-                'Ariba Invoice #', 'Type', 'Workbooks',
+                'Ariba Invoice #', 'Type', 'Workbooks', 'Quantity',
                 'Child Name', 'Parent Email',
                 'Address Line 1', 'Address Line 2', 'City', 'State', 'Zip Code', 'Phone',
                 'ST Code', 'Site',
@@ -409,13 +409,14 @@ def process_orders():
             if order_id not in orders:
                 orders[order_id] = {
                     'fields': f,
-                    'workbook_record_ids': set(),
+                    'workbook_quantities': {},  # wb_record_id → quantity
                     'types': set(),
                     'st_code': '',
                     'site': '',
                 }
+            qty = int(f.get('Quantity') or 1)
             for wb_id in (f.get('Workbooks') or []):
-                orders[order_id]['workbook_record_ids'].add(wb_id)
+                orders[order_id]['workbook_quantities'][wb_id] = qty
             for t in (f.get('Type') or []):
                 orders[order_id]['types'].add(t)
             st_code = (f.get('ST Code') or '').strip()
@@ -476,8 +477,8 @@ def process_orders():
                 # Books — create Shopify order
                 if has_books:
                     line_items = []
-                    workbook_names = []
-                    for wb_record_id in order_data['workbook_record_ids']:
+                    workbook_items = []  # list of (name, quantity) for confirmation email
+                    for wb_record_id, qty in order_data['workbook_quantities'].items():
                         wb_info = workbook_map.get(wb_record_id, {})
                         barcode = wb_info.get('barcode', '').lower()
                         name = wb_info.get('name', '')
@@ -488,9 +489,9 @@ def process_orders():
                         if not variant_id:
                             log.append(f"Error: barcode {barcode!r} not found in Shopify")
                             continue
-                        line_items.append({'variant_id': variant_id, 'quantity': 1})
+                        line_items.append({'variant_id': variant_id, 'quantity': qty})
                         if name:
-                            workbook_names.append(name)
+                            workbook_items.append((name, qty))
 
                     if not line_items:
                         log.append("Error: no valid Shopify line items found")
@@ -521,7 +522,7 @@ def process_orders():
                     wb_ok = send_order_confirmation_email(
                         to_email=email,
                         order_id=order_id,
-                        workbook_names=workbook_names,
+                        workbook_items=workbook_items,
                         child_name=child_name,
                         address_line1=f.get('Address Line 1', ''),
                         address_line2=f.get('Address Line 2', ''),
