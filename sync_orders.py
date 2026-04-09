@@ -58,7 +58,7 @@ def send_error_email(subject, body):
 def get_mirakl_orders():
     """Fetch all orders with status Pending Acceptance from Mirakl."""
     headers = {'Authorization': MIRAKL_API_KEY}
-    params = {'order_state_codes': 'WAITING_ACCEPTANCE', 'max': 100}
+    params = {'order_state_codes': 'SHIPPING', 'max': 5}  # DEBUG ONLY
     response = requests.get(
         f"{MIRAKL_API_URL}/api/orders",
         headers=headers,
