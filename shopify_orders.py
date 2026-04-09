@@ -426,8 +426,9 @@ def process_orders():
             if site:
                 orders[order_id]['site'] = site
 
-        barcode_map = get_shopify_barcode_map()
-        workbook_map = get_workbook_map()
+        any_books = any('Book' in o['types'] for o in orders.values())
+        barcode_map = get_shopify_barcode_map() if any_books else {}
+        workbook_map = get_workbook_map() if any_books else {}
         processed_count = 0
 
         for order_id, order_data in orders.items():
