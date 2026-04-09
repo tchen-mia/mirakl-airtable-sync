@@ -357,7 +357,7 @@ def add_tracking_in_mirakl(order_id, tracking_number):
         timeout=30
     )
     if not response.ok:
-        print(f"Mirakl tracking error {response.status_code}: {response.text}")
+        print(f"Mirakl tracking error {response.status_code}: {response.text[:1000]}")
     response.raise_for_status()
 
 
@@ -434,12 +434,20 @@ def process_orders():
                     'types': set(),
                     'st_code': '',
                     'site': '',
+                    'st_record_ids': [],
+                    'book_record_ids': [],
                 }
+            record_id = record['id']
             qty = int(f.get('Quantity') or 1)
             for wb_id in (f.get('Workbooks') or []):
                 orders[order_id]['workbook_quantities'][wb_id] = qty
-            for t in (f.get('Type') or []):
+            row_types = f.get('Type') or []
+            for t in row_types:
                 orders[order_id]['types'].add(t)
+            if 'SuperTeacher' in row_types:
+                orders[order_id]['st_record_ids'].append(record_id)
+            if 'Book' in row_types:
+                orders[order_id]['book_record_ids'].append(record_id)
             st_code = (f.get('ST Code') or '').strip()
             if st_code:
                 orders[order_id]['st_code'] = st_code
@@ -488,6 +496,8 @@ def process_orders():
                     )
                     if st_ok:
                         log.append("ST activation email sent")
+                        for rid in order_data['st_record_ids']:
+                            update_airtable_record(rid, {'Tracking Number': st_code})
                     else:
                         log.append("Error: ST activation email failed")
                         send_error_email(
@@ -571,9 +581,10 @@ def process_orders():
 
                     update_all_records_for_order(order_id, {
                         'Mirakl': 'Ordered',
-                        'Shopify Order ID': shopify_order_id,
                         'Automation Log': ' | '.join(log),
                     })
+                    for rid in order_data['book_record_ids']:
+                        update_airtable_record(rid, {'Shopify Order ID': shopify_order_id})
                     print(f"Order {order_id} → Shopify {shopify_order_id} (Ordered)")
 
                 else:
