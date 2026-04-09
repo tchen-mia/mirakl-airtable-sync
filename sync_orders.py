@@ -313,8 +313,7 @@ def sync_orders():
                     fields['Site'] = item['site']
                 if item['workbook_id']:
                     fields['Workbooks'] = [item['workbook_id']]
-                if item['sku_type'] == 'Book':
-                    fields['Quantity'] = item['quantity']
+                fields['Quantity'] = item['quantity']
                 if item.get('review_reason'):
                     fields['Automation Log'] = item['review_reason']
 
