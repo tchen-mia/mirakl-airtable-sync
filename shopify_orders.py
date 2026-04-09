@@ -267,8 +267,9 @@ def create_shopify_order(line_items, shipping_address, email):
         }
     }
     response = requests.post(url, headers=headers, json=body, timeout=30)
+    print(f"Shopify order response {response.status_code}: {response.text[:500]}")
     if not response.ok:
-        print(f"Shopify order error {response.status_code}: {response.text}")
+        print(f"Shopify order error body: {response.text}")
     response.raise_for_status()
     return str(response.json()['order']['id'])
 
@@ -494,13 +495,17 @@ def process_orders():
                         if name:
                             workbook_items.append((name, qty))
 
-                    if not line_items:
-                        log.append("Error: no valid Shopify line items found")
-                        update_all_records_for_order(order_id, {'Automation Log': ' | '.join(log)})
+                    expected = len(order_data['workbook_quantities'])
+                    if len(line_items) < expected:
+                        # Some workbooks couldn't be matched — don't create a partial order
+                        update_all_records_for_order(order_id, {
+                            'Mirakl': 'New - Review',
+                            'Automation Log': ' | '.join(log),
+                        })
                         send_error_email(
                             f"Shopify Order Error: {order_id}",
-                            f"Order {order_id} has Book items but none matched a Shopify variant.\n\n"
-                            f"Log: {' | '.join(log)}"
+                            f"Order {order_id}: only {len(line_items)} of {expected} workbooks matched a Shopify variant. "
+                            f"No Shopify order was created.\n\nLog: {' | '.join(log)}"
                         )
                         continue
 
