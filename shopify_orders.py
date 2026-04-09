@@ -358,6 +358,9 @@ def add_tracking_in_mirakl(order_id, tracking_number):
     )
     if not response.ok:
         print(f"Mirakl tracking error {response.status_code}: {response.text[:1000]}")
+        if response.status_code == 400 and 'already used' in response.text:
+            print("Tracking number already registered in Mirakl — continuing to ship.")
+            return
     response.raise_for_status()
 
 
