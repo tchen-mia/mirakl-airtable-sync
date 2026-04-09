@@ -480,10 +480,12 @@ def process_orders():
                 if has_books:
                     line_items = []
                     workbook_items = []  # list of (name, quantity) for confirmation email
+                    print(f"Order {order_id}: {len(order_data['workbook_quantities'])} workbook(s) to process")
                     for wb_record_id, qty in order_data['workbook_quantities'].items():
                         wb_info = workbook_map.get(wb_record_id, {})
                         barcode = wb_info.get('barcode', '').lower()
                         name = wb_info.get('name', '')
+                        print(f"  Workbook {wb_record_id}: name={name!r}, barcode={barcode!r}")
                         if not barcode:
                             log.append(f"Error: workbook {wb_record_id} has no barcode")
                             continue
