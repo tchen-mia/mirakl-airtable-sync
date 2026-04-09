@@ -58,7 +58,7 @@ def send_error_email(subject, body):
 def get_mirakl_orders():
     """Fetch all orders with status Pending Acceptance from Mirakl."""
     headers = {'Authorization': MIRAKL_API_KEY}
-    params = {'max': 5}  # DEBUG ONLY - no state filter
+    params = {'order_state_codes': 'WAITING_ACCEPTANCE', 'max': 100}
     response = requests.get(
         f"{MIRAKL_API_URL}/api/orders",
         headers=headers,
@@ -217,14 +217,13 @@ def sync_orders():
 
         for order in orders:
             order_id = order.get('order_id')
-            customer = order.get('customer') or {}
-            print(f"Order {order_id}: customer={customer.get('firstname')!r} {customer.get('lastname')!r}, email={customer.get('email')!r}", flush=True)
             if order_id in existing_ids:
                 continue
 
             # Parse order date (Mirakl returns ISO 8601, Airtable expects YYYY-MM-DD)
             created_date = (order.get('created_date') or '')[:10]
 
+            customer = order.get('customer') or {}
             customer_name = f"{customer.get('firstname', '')} {customer.get('lastname', '')}".strip()
             customer_email = customer.get('email', '')
 
