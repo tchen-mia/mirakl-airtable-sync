@@ -72,6 +72,9 @@ def send_order_confirmation_email(to_email, order_id, workbook_items, child_name
 
             <ul style="line-height: 2;">
                 {order_items_html}
+            </ul>
+
+            <ul style="line-height: 2;">
                 <li>Recipient full name: <strong>{child_name}</strong></li>
                 <li>Recipient mailing address: <strong>{mailing_address}</strong></li>
                 <li>Recipient phone number: <strong>{phone}</strong></li>
