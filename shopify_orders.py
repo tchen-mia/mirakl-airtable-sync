@@ -387,22 +387,39 @@ def process_orders():
     - Mixed book + digital/ST: creates Shopify order, sends ST email if applicable → Ordered
     """
     try:
-        records = get_airtable_records(
+        trigger_records = get_airtable_records(
             "{Mirakl} = 'Order'",
-            fields=[
-                'Ariba Invoice #', 'Type', 'Workbooks', 'Quantity',
-                'Child Name', 'Parent Email',
-                'Address Line 1', 'Address Line 2', 'City', 'State', 'Zip Code', 'Phone',
-                'ST Code', 'Site',
-            ]
+            fields=['Ariba Invoice #']
         )
-        if not records:
+        if not trigger_records:
             print("No orders to process.")
             return
 
+        # Find which order IDs have at least one 'Order' row
+        order_ids_to_process = set()
+        for record in trigger_records:
+            order_id = (record.get('fields') or {}).get('Ariba Invoice #')
+            if order_id:
+                order_ids_to_process.add(order_id)
+
+        # Fetch ALL rows for those order IDs to get complete workbook/type info
+        FIELDS = [
+            'Ariba Invoice #', 'Type', 'Workbooks', 'Quantity',
+            'Child Name', 'Parent Email',
+            'Address Line 1', 'Address Line 2', 'City', 'State', 'Zip Code', 'Phone',
+            'ST Code', 'Site',
+        ]
+        all_records = []
+        for order_id in order_ids_to_process:
+            recs = get_airtable_records(
+                f"{{Ariba Invoice #}} = '{order_id}'",
+                fields=FIELDS
+            )
+            all_records.extend(recs)
+
         # Group records by order ID
         orders = {}
-        for record in records:
+        for record in all_records:
             f = record.get('fields') or {}
             order_id = f.get('Ariba Invoice #')
             if not order_id:
