@@ -226,6 +226,7 @@ def sync_orders():
             customer = order.get('customer') or {}
             customer_name = f"{customer.get('firstname', '')} {customer.get('lastname', '')}".strip()
             customer_email = customer.get('email', '')
+            print(f"Order {order_id}: customer={customer_name!r}, email={customer_email!r}")
 
             # Shipping address (available at WAITING_ACCEPTANCE)
             addr = customer.get('shipping_address') or {}
