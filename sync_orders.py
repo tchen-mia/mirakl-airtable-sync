@@ -217,16 +217,16 @@ def sync_orders():
 
         for order in orders:
             order_id = order.get('order_id')
+            customer = order.get('customer') or {}
+            print(f"Order {order_id}: customer={customer.get('firstname')!r} {customer.get('lastname')!r}, email={customer.get('email')!r}", flush=True)
             if order_id in existing_ids:
                 continue
 
             # Parse order date (Mirakl returns ISO 8601, Airtable expects YYYY-MM-DD)
             created_date = (order.get('created_date') or '')[:10]
 
-            customer = order.get('customer') or {}
             customer_name = f"{customer.get('firstname', '')} {customer.get('lastname', '')}".strip()
             customer_email = customer.get('email', '')
-            print(f"Order {order_id}: customer={customer_name!r}, email={customer_email!r}")
 
             # Shipping address (available at WAITING_ACCEPTANCE)
             addr = customer.get('shipping_address') or {}
