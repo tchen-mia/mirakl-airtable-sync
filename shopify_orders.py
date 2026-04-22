@@ -267,6 +267,13 @@ def create_shopify_order(line_items, shipping_address, email):
             'financial_status': 'paid',
             'send_receipt': False,
             'send_fulfillment_receipt': False,
+            'shipping_lines': [
+                {
+                    'title': 'Express (2 to 5 business days)',
+                    'price': '0.00',
+                    'code': 'Express',
+                }
+            ],
         }
     }
     response = requests.post(url, headers=headers, json=body, timeout=30)
