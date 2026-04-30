@@ -29,7 +29,7 @@ DEFAULT_INVOICE_FIELD = 'Invoice #'
 ORDER_FIELDS = [
     'Parent Name', 'Parent Email', 'Phone',
     'Address Line 1', 'Address Line 2', 'City', 'State', 'Zip Code',
-    'Quantity', 'Workbooks', 'Shopify Order ID', 'Automation Log',
+    'Quantity', 'Workbooks Ordered', 'Shopify Order ID', 'Automation Log',
     'Invoice #', 'PO#', 'CW Receipt',
 ]
 
@@ -209,7 +209,7 @@ def process_table(table_name, barcode_map, workbook_map):
         record_id = record['id']
         log = []
 
-        linked = f.get('Workbooks') or []
+        linked = f.get('Workbooks Ordered') or []
         quantity = int(f.get('Quantity') or 1)
 
         line_items = []
