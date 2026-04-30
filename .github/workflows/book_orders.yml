@@ -30,4 +30,5 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           SMTP_FROM_BOOKS: ${{ secrets.SMTP_FROM_BOOKS }}
+          BOOK_ORDER_INVOICE_FIELDS: ${{ secrets.BOOK_ORDER_INVOICE_FIELDS }}
         run: python book_orders.py

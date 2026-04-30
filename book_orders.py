@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import smtplib
@@ -17,11 +18,19 @@ SMTP_USER = os.environ.get('SMTP_USER', '')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
 SMTP_FROM_BOOKS = os.environ.get('SMTP_FROM_BOOKS', '') or os.environ.get('SMTP_USER', '')
 
+# Per-table override of which column to use as the invoice number in the email subject.
+# Format: JSON object e.g. {"Table A": "PO#", "Table B": "CW Receipt"}
+# Tables not listed default to "Invoice #".
+_raw = os.environ.get('BOOK_ORDER_INVOICE_FIELDS', '{}')
+INVOICE_FIELD_BY_TABLE = json.loads(_raw)
+
 TRIGGER_STATUS = '📚 Submit Book Order'
+DEFAULT_INVOICE_FIELD = 'Invoice #'
 ORDER_FIELDS = [
     'Parent Name', 'Parent Email', 'Phone',
     'Address Line 1', 'Address Line 2', 'City', 'State', 'Zip Code',
-    'Quantity', 'Workbooks', 'Shopify Order ID', 'Automation Log', 'Invoice #',
+    'Quantity', 'Workbooks', 'Shopify Order ID', 'Automation Log',
+    'Invoice #', 'PO#', 'CW Receipt',
 ]
 
 
@@ -240,7 +249,8 @@ def process_table(table_name, barcode_map, workbook_map):
 
         try:
             order_id, order_number = create_shopify_order(line_items, shipping_address, f.get('Parent Email', ''))
-            invoice_number = f.get('Invoice #') or order_number
+            invoice_field = INVOICE_FIELD_BY_TABLE.get(table_name, DEFAULT_INVOICE_FIELD)
+            invoice_number = f.get(invoice_field) or order_number
             log.append(f'Shopify order #{order_number} created ({len(line_items)} item(s), qty {quantity})')
             update_record(table_name, record_id, {
                 'Shopify Order ID': order_id,
