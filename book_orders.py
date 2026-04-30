@@ -13,7 +13,7 @@ TRIGGER_STATUS = '📚 Submit Book Order'
 ORDER_FIELDS = [
     'Parent Name', 'Parent Email', 'Phone',
     'Address Line 1', 'Address Line 2', 'City', 'State', 'Zip Code',
-    'Quantity', 'Workbooks', 'Shopify Order ID',
+    'Quantity', 'Workbooks', 'Shopify Order ID', 'Automation Log',
 ]
 
 
@@ -125,8 +125,9 @@ def process_table(table_name, barcode_map, workbook_map):
     for record in records:
         f = record.get('fields', {})
         record_id = record['id']
+        log = []
 
-        linked = f.get('Workbooks') or []  # list of record IDs (strings)
+        linked = f.get('Workbooks') or []
         quantity = int(f.get('Quantity') or 1)
 
         line_items = []
@@ -135,12 +136,16 @@ def process_table(table_name, barcode_map, workbook_map):
             barcode = wb.get('barcode', '')
             variant_id = barcode_map.get(barcode)
             if not variant_id:
-                print(f'  ERROR: barcode "{barcode}" ({wb.get("name")}) not found in Shopify — skipping record {record_id}')
+                msg = f'ERROR: barcode "{barcode}" ({wb.get("name")}) not found in Shopify'
+                log.append(msg)
+                print(f'  {msg} — skipping record {record_id}')
                 line_items = []
                 break
             line_items.append({'variant_id': variant_id, 'quantity': quantity})
 
         if not line_items:
+            if log:
+                update_record(table_name, record_id, {'Automation Log': ' | '.join(log)})
             continue
 
         full_name = (f.get('Parent Name') or '').strip()
@@ -159,9 +164,15 @@ def process_table(table_name, barcode_map, workbook_map):
 
         try:
             order_id = create_shopify_order(line_items, shipping_address, f.get('Parent Email', ''))
-            update_record(table_name, record_id, {'Shopify Order ID': order_id})
-            print(f'  Created Shopify order {order_id} for {full_name} ({len(line_items)} item(s), qty {quantity})')
+            log.append(f'Shopify order {order_id} created ({len(line_items)} item(s), qty {quantity})')
+            update_record(table_name, record_id, {
+                'Shopify Order ID': order_id,
+                'Automation Log': ' | '.join(log),
+            })
+            print(f'  Created Shopify order {order_id} for {full_name}')
         except Exception as e:
+            log.append(f'ERROR creating Shopify order: {e}')
+            update_record(table_name, record_id, {'Automation Log': ' | '.join(log)})
             print(f'  ERROR creating order for {full_name} in {table_name}: {e}')
 
 
