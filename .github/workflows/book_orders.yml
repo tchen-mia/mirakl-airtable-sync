@@ -26,4 +26,9 @@ jobs:
           SHOPIFY_STORE_URL: ${{ secrets.SHOPIFY_STORE_URL }}
           SHOPIFY_API_TOKEN: ${{ secrets.SHOPIFY_API_TOKEN }}
           BOOK_ORDER_TABLES: ${{ secrets.BOOK_ORDER_TABLES }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM_BOOKS: ${{ secrets.SMTP_FROM_BOOKS }}
         run: python book_orders.py
