@@ -17,6 +17,7 @@ SMTP_PORT = int(os.environ.get('SMTP_PORT') or 587)
 SMTP_USER = os.environ.get('SMTP_USER', '')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
 SMTP_FROM_BOOKS = os.environ.get('SMTP_FROM_BOOKS', '') or os.environ.get('SMTP_USER', '')
+ERROR_EMAIL_TO = os.environ.get('ERROR_EMAIL_TO', '')
 
 # Per-table override of which column to use as the invoice number in the email subject.
 # Format: JSON object e.g. {"Table A": "PO#", "Table B": "CW Receipt"}
@@ -66,6 +67,24 @@ def update_record(table_name, record_id, fields):
 
 
 # ── Email ─────────────────────────────────────────────────────────────────────
+
+def send_error_email(subject, body):
+    if not all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD, ERROR_EMAIL_TO]):
+        print(f'Error email not configured. Error was: {subject}')
+        return
+    try:
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = SMTP_FROM_BOOKS
+        msg['To'] = ERROR_EMAIL_TO
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+        print(f'Error email sent to {ERROR_EMAIL_TO}')
+    except Exception as e:
+        print(f'Failed to send error email: {e}')
+
 
 def send_order_confirmation_email(to_email, order_number, workbook_items, recipient_name,
                                    address_line1, address_line2, city, state, zip_code, phone):
@@ -231,6 +250,10 @@ def process_table(table_name, barcode_map, workbook_map):
         if not line_items:
             if log:
                 update_record(table_name, record_id, {'Automation Log': ' | '.join(log)})
+                send_error_email(
+                    f'Book Order Error: {table_name} / {record_id}',
+                    f'Could not create Shopify order for record {record_id} in "{table_name}".\n\nLog: {" | ".join(log)}',
+                )
             continue
 
         full_name = (f.get('Parent Name') or '').strip()
@@ -273,6 +296,10 @@ def process_table(table_name, barcode_map, workbook_map):
             log.append(f'ERROR creating Shopify order: {e}')
             update_record(table_name, record_id, {'Automation Log': ' | '.join(log)})
             print(f'  ERROR creating order for {full_name} in {table_name}: {e}')
+            send_error_email(
+                f'Book Order Error: {full_name} / {table_name}',
+                f'Failed to create Shopify order for {full_name} in "{table_name}".\n\nLog: {" | ".join(log)}\n\nError: {e}',
+            )
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
