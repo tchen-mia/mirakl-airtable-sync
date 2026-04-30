@@ -60,3 +60,22 @@ jobs:
           SMTP_FROM_STATEFUNDING: ${{ secrets.SMTP_FROM_STATEFUNDING }}
           ERROR_EMAIL_TO: ${{ secrets.ERROR_EMAIL_TO }}
         run: python shopify_orders.py
+
+  book-orders:
+    name: Create Shopify orders from Airtable book order tables
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run book orders
+        env:
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+          SHOPIFY_STORE_URL: ${{ secrets.SHOPIFY_STORE_URL }}
+          SHOPIFY_API_TOKEN: ${{ secrets.SHOPIFY_API_TOKEN }}
+          BOOK_ORDER_TABLES: ${{ secrets.BOOK_ORDER_TABLES }}
+        run: python book_orders.py
