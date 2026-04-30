@@ -31,4 +31,5 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           SMTP_FROM_BOOKS: ${{ secrets.SMTP_FROM_BOOKS }}
           BOOK_ORDER_INVOICE_FIELDS: ${{ secrets.BOOK_ORDER_INVOICE_FIELDS }}
+          ERROR_EMAIL_TO: ${{ secrets.ERROR_EMAIL_TO }}
         run: python book_orders.py
