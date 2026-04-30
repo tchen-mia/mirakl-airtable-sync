@@ -220,7 +220,7 @@ def create_shopify_order(line_items, shipping_address, email):
 
 def process_table(table_name, barcode_map, workbook_map):
     formula = f"AND({{Status}} = '{TRIGGER_STATUS}', {{Shopify Order ID}} = '')"
-    records = get_records(table_name, formula, fields=ORDER_FIELDS)
+    records = get_records(table_name, formula)
     print(f'  {table_name}: {len(records)} pending order(s)')
 
     for record in records:
