@@ -21,7 +21,7 @@ TRIGGER_STATUS = '📚 Submit Book Order'
 ORDER_FIELDS = [
     'Parent Name', 'Parent Email', 'Phone',
     'Address Line 1', 'Address Line 2', 'City', 'State', 'Zip Code',
-    'Quantity', 'Workbooks', 'Shopify Order ID', 'Automation Log',
+    'Quantity', 'Workbooks', 'Shopify Order ID', 'Automation Log', 'Invoice #',
 ]
 
 
@@ -239,6 +239,7 @@ def process_table(table_name, barcode_map, workbook_map):
 
         try:
             order_id, order_number = create_shopify_order(line_items, shipping_address, f.get('Parent Email', ''))
+            invoice_number = f.get('Invoice #') or order_number
             log.append(f'Shopify order #{order_number} created ({len(line_items)} item(s), qty {quantity})')
             update_record(table_name, record_id, {
                 'Shopify Order ID': order_id,
@@ -247,7 +248,7 @@ def process_table(table_name, barcode_map, workbook_map):
             print(f'  Created Shopify order #{order_number} for {full_name}')
             send_order_confirmation_email(
                 to_email=f.get('Parent Email', ''),
-                order_number=order_number,
+                order_number=invoice_number,
                 workbook_items=workbook_items,
                 recipient_name=full_name,
                 address_line1=f.get('Address Line 1', ''),
