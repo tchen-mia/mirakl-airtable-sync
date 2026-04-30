@@ -171,6 +171,7 @@ def create_shopify_order(line_items, shipping_address, email):
     body = {
         'order': {
             'email': email,
+            'financial_status': 'paid',
             'send_receipt': False,
             'send_fulfillment_receipt': False,
             'line_items': line_items,
