@@ -1,12 +1,14 @@
 name: Mirakl Order Sync
 
 on:
-  # PRODUCTION: uncomment the schedule block below when going live
+  schedule:
+    - cron: '0 16 * * *'  # Once daily at noon ET (testing — switch to full schedule at go-live)
+  workflow_dispatch:
+  # PRODUCTION: replace schedule above with full schedule at go-live
   # schedule:
   #   - cron: '*/5 11-23 * * *'  # Every 5 min, business hours (7am-11pm ET)
   #   - cron: '*/5 0-3 * * *'    # Every 5 min, business hours continued
   #   - cron: '0 4-10 * * *'     # Every hour, outside business hours
-  workflow_dispatch: # Manual trigger only during testing
 
 jobs:
   sync-orders:
