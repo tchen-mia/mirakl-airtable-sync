@@ -228,8 +228,11 @@ def process_table(table_name, barcode_map, workbook_map):
         record_id = record['id']
         log = []
 
-        required = ['Parent Name', 'Parent Email', 'Address Line 1', 'City', 'State', 'Zip Code']
+        ship_name = (f.get('Parent Name') or f.get('Student Name') or f.get('Child Name') or '').strip()
+        required = ['Parent Email', 'Address Line 1', 'City', 'State', 'Zip Code']
         missing = [k for k in required if not (f.get(k) or '').strip()]
+        if not ship_name:
+            missing.insert(0, 'Parent Name / Student Name / Child Name')
         if missing:
             msg = f'ERROR: missing required field(s): {", ".join(missing)}'
             log.append(msg)
@@ -269,7 +272,7 @@ def process_table(table_name, barcode_map, workbook_map):
                 )
             continue
 
-        full_name = (f.get('Parent Name') or '').strip()
+        full_name = ship_name
         first, *rest = full_name.split(' ', 1)
         shipping_address = {
             'first_name': first,
