@@ -228,6 +228,19 @@ def process_table(table_name, barcode_map, workbook_map):
         record_id = record['id']
         log = []
 
+        required = ['Parent Name', 'Parent Email', 'Address Line 1', 'City', 'State', 'Zip Code']
+        missing = [k for k in required if not (f.get(k) or '').strip()]
+        if missing:
+            msg = f'ERROR: missing required field(s): {", ".join(missing)}'
+            log.append(msg)
+            print(f'  {msg} — skipping record {record_id}')
+            update_record(table_name, record_id, {'Automation Log': ' | '.join(log)})
+            send_error_email(
+                f'Book Order Error: {table_name} / {record_id}',
+                f'Cannot create Shopify order for record {record_id} in "{table_name}".\n\nLog: {" | ".join(log)}',
+            )
+            continue
+
         linked = f.get('Workbooks Ordered') or []
         quantity = int(f.get('Quantity') or 1)
 
