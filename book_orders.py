@@ -229,10 +229,13 @@ def process_table(table_name, barcode_map, workbook_map):
         log = []
 
         ship_name = (f.get('Parent Name') or f.get('Student Name') or f.get('Child Name') or '').strip()
-        required = ['Parent Email', 'Address Line 1', 'City', 'State', 'Zip Code']
+        parent_email = (f.get('Parent Email') or f.get('Account Email') or '').strip()
+        required = ['Address Line 1', 'City', 'State', 'Zip Code']
         missing = [k for k in required if not (f.get(k) or '').strip()]
         if not ship_name:
             missing.insert(0, 'Parent Name / Student Name / Child Name')
+        if not parent_email:
+            missing.insert(0, 'Parent Email / Account Email')
         if missing:
             msg = f'ERROR: missing required field(s): {", ".join(missing)}'
             log.append(msg)
@@ -287,7 +290,7 @@ def process_table(table_name, barcode_map, workbook_map):
         }
 
         try:
-            order_id, order_number = create_shopify_order(line_items, shipping_address, f.get('Parent Email', ''))
+            order_id, order_number = create_shopify_order(line_items, shipping_address, parent_email)
             invoice_field = INVOICE_FIELD_BY_TABLE.get(table_name, DEFAULT_INVOICE_FIELD)
             invoice_number = f.get(invoice_field) or order_number
             log.append(f'Shopify order #{order_number} created ({len(line_items)} item(s), qty {quantity})')
@@ -297,7 +300,7 @@ def process_table(table_name, barcode_map, workbook_map):
             })
             print(f'  Created Shopify order #{order_number} for {full_name}')
             send_order_confirmation_email(
-                to_email=f.get('Parent Email', ''),
+                to_email=parent_email,
                 order_number=invoice_number,
                 workbook_items=workbook_items,
                 recipient_name=full_name,
