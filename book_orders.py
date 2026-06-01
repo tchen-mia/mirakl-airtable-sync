@@ -189,7 +189,48 @@ def get_workbook_map():
     return workbook_map
 
 
-def create_shopify_order(line_items, shipping_address, email):
+def order_idempotency_tag(record_id):
+    """Tag used to make order creation idempotent per Airtable record."""
+    return f'atid-{record_id}'
+
+
+def find_existing_order(record_id):
+    """Return (order_id, order_number) for an order already created from this
+    Airtable record, else None. Used to avoid duplicate orders if two runs overlap
+    or if a previous run created the order but failed to write the ID back.
+
+    REST orders.json can't filter by tag, so we query the GraphQL Admin API.
+    """
+    headers = {
+        'X-Shopify-Access-Token': SHOPIFY_API_TOKEN,
+        'Content-Type': 'application/json',
+    }
+    url = f'https://{SHOPIFY_STORE_URL}/admin/api/{SHOPIFY_API_VERSION}/graphql.json'
+    query = '''
+    query($q: String!) {
+      orders(first: 1, query: $q) {
+        edges { node { id name } }
+      }
+    }'''
+    variables = {'q': f'tag:{order_idempotency_tag(record_id)}'}
+    r = requests.post(url, headers=headers, json={'query': query, 'variables': variables}, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    if data.get('errors'):
+        # Don't block creation on a lookup failure, but surface it in logs.
+        print(f'  GraphQL order lookup error for {record_id}: {data["errors"]}')
+        return None
+    edges = data.get('data', {}).get('orders', {}).get('edges', [])
+    if not edges:
+        return None
+    node = edges[0]['node']
+    # node['id'] is "gid://shopify/Order/123456"; node['name'] is "#1001".
+    order_id = node['id'].rsplit('/', 1)[-1]
+    order_number = node['name'].lstrip('#')
+    return str(order_id), str(order_number)
+
+
+def create_shopify_order(line_items, shipping_address, email, record_id):
     """Returns (order_id, order_number)."""
     headers = {
         'X-Shopify-Access-Token': SHOPIFY_API_TOKEN,
@@ -207,6 +248,9 @@ def create_shopify_order(line_items, shipping_address, email):
             'shipping_lines': [
                 {'title': 'Express (2 to 5 business days)', 'price': '0.00', 'code': 'Express'},
             ],
+            # Idempotency key: lets find_existing_order() detect this order on a
+            # later run so we never create a duplicate for the same record.
+            'tags': order_idempotency_tag(record_id),
         }
     }
     r = requests.post(url, headers=headers, json=body, timeout=30)
@@ -290,7 +334,23 @@ def process_table(table_name, barcode_map, workbook_map):
         }
 
         try:
-            order_id, order_number = create_shopify_order(line_items, shipping_address, parent_email)
+            # Idempotency check: if an order for this record already exists in
+            # Shopify (overlapping run, or a prior run that created the order but
+            # failed to write the ID back), recover it instead of creating a
+            # duplicate. The confirmation email was already sent that time, so we
+            # only repair the Airtable record here.
+            existing = find_existing_order(record_id)
+            if existing:
+                order_id, order_number = existing
+                log.append(f'Shopify order #{order_number} already exists for this record — self-heal, skipped creation')
+                update_record(table_name, record_id, {
+                    'Shopify Order ID': order_id,
+                    'Automation Log': ' | '.join(log),
+                })
+                print(f'  Order #{order_number} already existed for {full_name} — wrote ID back, no duplicate created')
+                continue
+
+            order_id, order_number = create_shopify_order(line_items, shipping_address, parent_email, record_id)
             invoice_field = INVOICE_FIELD_BY_TABLE.get(table_name, DEFAULT_INVOICE_FIELD)
             invoice_number = f.get(invoice_field) or order_number
             log.append(f'Shopify order #{order_number} created ({len(line_items)} item(s), qty {quantity})')
