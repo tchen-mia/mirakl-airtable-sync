@@ -2,10 +2,18 @@ name: Book Orders
 
 on:
   schedule:
-    - cron: '*/5 11-23 * * *'  # Every 5 min, business hours (7am-11pm ET)
-    - cron: '*/5 0-3 * * *'    # Every 5 min, business hours continued
-    - cron: '0 4-10/3 * * *'   # Every 3 hours, outside business hours
+    # Every 10 min, offset off the top of the hour. GitHub heavily throttles/drops
+    # high-frequency (*/5) and top-of-hour (0 *) scheduled runs; a moderate, offset
+    # cadence fires far more reliably and still keeps latency under ~15 min.
+    - cron: '3,13,23,33,43,53 * * * *'
   workflow_dispatch:
+
+# Never let two runs execute at once. The script's only first-line duplicate guard
+# is the Airtable filter, so overlapping runs could both create a Shopify order.
+# Queue (do not cancel) — cancelling mid-run could itself orphan an order.
+concurrency:
+  group: book-orders
+  cancel-in-progress: false
 
 jobs:
   book-orders:
