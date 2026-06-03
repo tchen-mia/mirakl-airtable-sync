@@ -2,23 +2,29 @@ name: Book Orders
 
 on:
   schedule:
-    # Every 10 min, offset off the top of the hour. GitHub heavily throttles/drops
-    # high-frequency (*/5) and top-of-hour (0 *) scheduled runs; a moderate, offset
-    # cadence fires far more reliably and still keeps latency under ~15 min.
-    - cron: '3,13,23,33,43,53 * * * *'
+    # These are only "start attempts" — GitHub throttles this repo's scheduled
+    # events down to ~6/day no matter the cron (verified empirically), so we don't
+    # rely on each tick firing. Instead, whichever ticks DO fire each launch a
+    # long-running job that loops internally every 10 min (see the run step below).
+    # Frequent attempts (offset off the top of the hour) just maximize the chance a
+    # fresh loop starts every few hours.
+    - cron: '8,38 * * * *'
   workflow_dispatch:
 
-# Never let two runs execute at once. The script's only first-line duplicate guard
-# is the Airtable filter, so overlapping runs could both create a Shopify order.
-# Queue (do not cancel) — cancelling mid-run could itself orphan an order.
+# Keep one loop alive at a time. cancel-in-progress: true lets a fresh start cleanly
+# replace the running loop. This is safe because book_orders.py is now idempotent:
+# if a run is cancelled between creating a Shopify order and writing the ID back to
+# Airtable, find_existing_order() recovers it on the next run with no duplicate.
 concurrency:
   group: book-orders
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   book-orders:
     name: Create Shopify orders from Airtable book order tables
     runs-on: ubuntu-latest
+    # GitHub's hard job cap is 6h. Stay safely under it; the loop self-exits first.
+    timeout-minutes: 358
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,7 +32,7 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Run book orders
+      - name: Run book orders on a loop
         env:
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
           AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
@@ -40,4 +46,20 @@ jobs:
           SMTP_FROM_BOOKS: ${{ secrets.SMTP_FROM_BOOKS }}
           BOOK_ORDER_INVOICE_FIELDS: ${{ secrets.BOOK_ORDER_INVOICE_FIELDS }}
           ERROR_EMAIL_TO: ${{ secrets.ERROR_EMAIL_TO }}
-        run: python book_orders.py
+        # Loop the script every 10 min for ~5h50m, then exit so the next scheduled
+        # start (or a still-running concurrent start) takes over. Real sleeps on a
+        # live runner are never dropped, so this gives a genuine ~10-min cadence that
+        # the bare `schedule:` trigger cannot. A failed iteration is logged and the
+        # loop continues; the next scheduled start also bridges any gap if this job
+        # ends or dies.
+        run: |
+          budget_end=$(( $(date +%s) + 350*60 ))
+          while :; do
+            echo "=== book_orders run at $(date -u +%FT%TZ) ==="
+            python book_orders.py || echo "run failed; continuing loop"
+            if [ $(( $(date +%s) + 600 )) -ge "$budget_end" ]; then
+              echo "Approaching job time budget; exiting loop (next start resumes)."
+              break
+            fi
+            sleep 600
+          done
