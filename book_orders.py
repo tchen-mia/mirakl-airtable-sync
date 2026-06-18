@@ -141,7 +141,7 @@ def send_order_confirmation_email(to_email, order_number, workbook_items, recipi
             server.starttls()
             server.login(SMTP_USER, SMTP_PASSWORD)
             server.send_message(msg)
-        print(f'Confirmation email sent to {to_email} for order {order_number}')
+        print(f'Confirmation email sent for order {order_number}')
     except Exception as e:
         print(f'Failed to send confirmation email for order {order_number}: {e}')
 
@@ -254,7 +254,9 @@ def create_shopify_order(line_items, shipping_address, email, record_id):
         }
     }
     r = requests.post(url, headers=headers, json=body, timeout=30)
-    print(f'Shopify response {r.status_code}: {r.text[:300]}')
+    # Do NOT log r.text — the Shopify order response echoes customer name, email,
+    # and shipping address (PII). Status code only.
+    print(f'Shopify response {r.status_code}')
     r.raise_for_status()
     order = r.json()['order']
     return str(order['id']), str(order['order_number'])
@@ -347,7 +349,7 @@ def process_table(table_name, barcode_map, workbook_map):
                     'Shopify Order ID': order_id,
                     'Automation Log': ' | '.join(log),
                 })
-                print(f'  Order #{order_number} already existed for {full_name} — wrote ID back, no duplicate created')
+                print(f'  Order #{order_number} already existed for record {record_id} — wrote ID back, no duplicate created')
                 continue
 
             order_id, order_number = create_shopify_order(line_items, shipping_address, parent_email, record_id)
@@ -358,7 +360,7 @@ def process_table(table_name, barcode_map, workbook_map):
                 'Shopify Order ID': order_id,
                 'Automation Log': ' | '.join(log),
             })
-            print(f'  Created Shopify order #{order_number} for {full_name}')
+            print(f'  Created Shopify order #{order_number} for record {record_id}')
             send_order_confirmation_email(
                 to_email=parent_email,
                 order_number=invoice_number,
@@ -374,7 +376,7 @@ def process_table(table_name, barcode_map, workbook_map):
         except Exception as e:
             log.append(f'ERROR creating Shopify order: {e}')
             update_record(table_name, record_id, {'Automation Log': ' | '.join(log)})
-            print(f'  ERROR creating order for {full_name} in {table_name}: {e}')
+            print(f'  ERROR creating order for record {record_id} in {table_name}: {e}')
             send_error_email(
                 f'Book Order Error: {full_name} / {table_name}',
                 f'Failed to create Shopify order for {full_name} in "{table_name}".\n\nLog: {" | ".join(log)}\n\nError: {e}',
