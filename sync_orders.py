@@ -204,7 +204,7 @@ def accept_order_in_mirakl(order_id):
         timeout=30
     )
     if not response.ok:
-        print(f"Mirakl accept error {response.status_code}: {response.text}")
+        print(f"Mirakl accept error {response.status_code}")
     response.raise_for_status()
 
 
