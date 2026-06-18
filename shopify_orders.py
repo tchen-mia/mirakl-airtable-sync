@@ -99,7 +99,7 @@ def send_order_confirmation_email(to_email, order_id, workbook_items, child_name
             server.starttls()
             server.login(SMTP_USER, SMTP_PASSWORD)
             server.send_message(msg)
-        print(f"Workbook confirmation email sent to {to_email} for order {order_id}")
+        print(f"Workbook confirmation email sent for order {order_id}")
         return True
     except Exception as e:
         print(f"Failed to send workbook confirmation email for order {order_id}: {e}")
@@ -157,7 +157,7 @@ def send_superteacher_activation_email(to_email, order_id, child_name, activatio
             server.starttls()
             server.login(SMTP_USER, SMTP_PASSWORD)
             server.send_message(msg)
-        print(f"SuperTeacher activation email sent to {to_email} for order {order_id}")
+        print(f"SuperTeacher activation email sent for order {order_id}")
         return True
     except Exception as e:
         print(f"Failed to send SuperTeacher email for order {order_id}: {e}")
@@ -277,9 +277,9 @@ def create_shopify_order(line_items, shipping_address, email):
         }
     }
     response = requests.post(url, headers=headers, json=body, timeout=30)
-    print(f"Shopify order response {response.status_code}: {response.text[:500]}")
-    if not response.ok:
-        print(f"Shopify order error body: {response.text}")
+    # Do NOT log response.text — the Shopify order payload echoes customer name,
+    # email, and shipping address (PII). Status code only.
+    print(f"Shopify order response {response.status_code}")
     response.raise_for_status()
     return str(response.json()['order']['id'])
 
