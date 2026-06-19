@@ -378,8 +378,8 @@ def process_table(table_name, barcode_map, workbook_map):
             update_record(table_name, record_id, {'Automation Log': ' | '.join(log)})
             print(f'  ERROR creating order for record {record_id} in {table_name}: {e}')
             send_error_email(
-                f'Book Order Error: {full_name} / {table_name}',
-                f'Failed to create Shopify order for {full_name} in "{table_name}".\n\nLog: {" | ".join(log)}\n\nError: {e}',
+                f'Book Order Error: {table_name} / {record_id}',
+                f'Failed to create Shopify order for record {record_id} in "{table_name}".\n\nLog: {" | ".join(log)}\n\nError: {e}',
             )
 
 

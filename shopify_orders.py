@@ -512,7 +512,7 @@ def process_orders():
                         log.append("Error: ST activation email failed")
                         send_error_email(
                             f"SuperTeacher Email Failed: Order {order_id}",
-                            f"Could not send activation email for order {order_id} to {email}.\n\n"
+                            f"Could not send activation email for order {order_id}.\n\n"
                             f"ST Code: {st_code}"
                         )
 
@@ -585,7 +585,7 @@ def process_orders():
                         log.append("Error: workbook confirmation email failed")
                         send_error_email(
                             f"Workbook Email Failed: Order {order_id}",
-                            f"Could not send workbook confirmation email for order {order_id} to {email}.\n\n"
+                            f"Could not send workbook confirmation email for order {order_id}.\n\n"
                             f"Shopify order {shopify_order_id} was created successfully."
                         )
 
