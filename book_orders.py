@@ -388,6 +388,9 @@ def process_table(table_name, barcode_map, workbook_map):
 def main():
     tables = [t.strip() for t in BOOK_ORDER_TABLES.split(',') if t.strip()]
     print(f'Processing {len(tables)} table(s) for book orders...')
+    # Log the per-table invoice-field overrides so the effective config is visible
+    # in the run log (these are field names, not secrets).
+    print(f'Invoice field overrides: {json.dumps(INVOICE_FIELD_BY_TABLE)}')
 
     barcode_map = get_shopify_barcode_map()
     print(f'Loaded {len(barcode_map)} Shopify variant barcodes')
