@@ -354,7 +354,10 @@ def process_table(table_name, barcode_map, workbook_map):
 
             order_id, order_number = create_shopify_order(line_items, shipping_address, parent_email, record_id)
             invoice_field = INVOICE_FIELD_BY_TABLE.get(table_name, DEFAULT_INVOICE_FIELD)
-            invoice_number = f.get(invoice_field) or order_number
+            # Fall back to 'Ariba Invoice #' (used by the Step Up / Mirakl tables)
+            # before the Shopify order number. Tables without that field are
+            # unaffected — f.get() returns None there.
+            invoice_number = f.get(invoice_field) or f.get('Ariba Invoice #') or order_number
             log.append(f'Shopify order #{order_number} created ({len(line_items)} item(s), qty {quantity})')
             update_record(table_name, record_id, {
                 'Shopify Order ID': order_id,
@@ -388,9 +391,6 @@ def process_table(table_name, barcode_map, workbook_map):
 def main():
     tables = [t.strip() for t in BOOK_ORDER_TABLES.split(',') if t.strip()]
     print(f'Processing {len(tables)} table(s) for book orders...')
-    # Log the per-table invoice-field overrides so the effective config is visible
-    # in the run log (these are field names, not secrets).
-    print(f'Invoice field overrides: {json.dumps(INVOICE_FIELD_BY_TABLE)}')
 
     barcode_map = get_shopify_barcode_map()
     print(f'Loaded {len(barcode_map)} Shopify variant barcodes')
