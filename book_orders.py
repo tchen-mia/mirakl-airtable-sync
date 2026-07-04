@@ -293,7 +293,7 @@ def process_table(table_name, barcode_map, workbook_map):
             )
             continue
 
-        linked = f.get('Workbooks Ordered') or []
+        linked = f.get('Workbooks Ordered') or f.get('Workbooks') or []
         quantity = int(f.get('Quantity') or 1)
 
         line_items = []
