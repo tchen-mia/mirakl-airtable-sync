@@ -7,11 +7,18 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 AIRTABLE_API_KEY = os.environ['AIRTABLE_API_KEY']
-AIRTABLE_BASE_ID = os.environ['AIRTABLE_BASE_ID']
+# Legacy single-base config — optional now. When BOOK_ORDER_BASES is set these are
+# ignored; when it is absent they are required (validated in build_bases()).
+AIRTABLE_BASE_ID = os.environ.get('AIRTABLE_BASE_ID')
+BOOK_ORDER_TABLES = os.environ.get('BOOK_ORDER_TABLES')
 SHOPIFY_STORE_URL = os.environ['SHOPIFY_STORE_URL']
 SHOPIFY_API_TOKEN = os.environ['SHOPIFY_API_TOKEN']
 SHOPIFY_API_VERSION = '2024-01'
-BOOK_ORDER_TABLES = os.environ['BOOK_ORDER_TABLES']
+# Multi-base config (optional, authoritative when set). JSON array of objects:
+#   [{"base_id": "app...", "tables": ["T1","T2"],
+#     "invoice_fields": {"T2": "PO#"}, "api_key": "pat...", "tag_prefix": "..."}]
+# See build_bases() for field semantics and the legacy fallback.
+BOOK_ORDER_BASES = os.environ.get('BOOK_ORDER_BASES', '').strip()
 SMTP_HOST = os.environ.get('SMTP_HOST', '')
 SMTP_PORT = int(os.environ.get('SMTP_PORT') or 587)
 SMTP_USER = os.environ.get('SMTP_USER', '')
@@ -21,7 +28,8 @@ ERROR_EMAIL_TO = os.environ.get('ERROR_EMAIL_TO', '')
 
 # Per-table override of which column to use as the invoice number in the email subject.
 # Format: JSON object e.g. {"Table A": "PO#", "Table B": "CW Receipt"}
-# Tables not listed default to "Invoice #".
+# Tables not listed default to "Invoice #". Used only by the legacy single-base path;
+# in multi-base mode each base carries its own invoice_fields map.
 _raw = os.environ.get('BOOK_ORDER_INVOICE_FIELDS', '{}')
 INVOICE_FIELD_BY_TABLE = json.loads(_raw)
 
@@ -35,11 +43,11 @@ ORDER_FIELDS = [
 ]
 
 
-# ── Airtable helpers (table-parameterized) ───────────────────────────────────
+# ── Airtable helpers (base- and table-parameterized) ─────────────────────────
 
-def get_records(table_name, filter_formula, fields=None):
-    headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
-    url = f'https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{requests.utils.quote(table_name, safe="")}'
+def get_records(base_id, table_name, filter_formula, fields=None, api_key=None):
+    headers = {'Authorization': f'Bearer {api_key or AIRTABLE_API_KEY}'}
+    url = f'https://api.airtable.com/v0/{base_id}/{requests.utils.quote(table_name, safe="")}'
     params = {'filterByFormula': filter_formula, 'pageSize': 100}
     if fields:
         params['fields[]'] = fields
@@ -56,12 +64,12 @@ def get_records(table_name, filter_formula, fields=None):
     return records
 
 
-def update_record(table_name, record_id, fields):
+def update_record(base_id, table_name, record_id, fields, api_key=None):
     headers = {
-        'Authorization': f'Bearer {AIRTABLE_API_KEY}',
+        'Authorization': f'Bearer {api_key or AIRTABLE_API_KEY}',
         'Content-Type': 'application/json',
     }
-    url = f'https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{requests.utils.quote(table_name, safe="")}/{record_id}'
+    url = f'https://api.airtable.com/v0/{base_id}/{requests.utils.quote(table_name, safe="")}/{record_id}'
     r = requests.patch(url, headers=headers, json={'fields': fields}, timeout=30)
     r.raise_for_status()
 
@@ -166,10 +174,11 @@ def get_shopify_barcode_map():
     return barcode_map
 
 
-def get_workbook_map():
-    """Return {airtable_record_id: {'barcode': str, 'name': str}} from Workbooks table."""
-    headers = {'Authorization': f'Bearer {AIRTABLE_API_KEY}'}
-    url = f'https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Workbooks'
+def get_workbook_map(base_id, api_key=None):
+    """Return {airtable_record_id: {'barcode': str, 'name': str}} from the base's
+    Workbooks table. Record IDs are base-scoped, so each base has its own map."""
+    headers = {'Authorization': f'Bearer {api_key or AIRTABLE_API_KEY}'}
+    url = f'https://api.airtable.com/v0/{base_id}/Workbooks'
     params = {'fields[]': ['Name', 'Barcode'], 'pageSize': 100}
     workbook_map = {}
     while True:
@@ -189,17 +198,27 @@ def get_workbook_map():
     return workbook_map
 
 
-def order_idempotency_tag(record_id):
-    """Tag used to make order creation idempotent per Airtable record."""
+def order_idempotency_tag(record_id, tag_prefix=''):
+    """Tag used to make order creation idempotent per Airtable record.
+
+    tag_prefix namespaces the tag by base (`atid-<prefix>-<record_id>`) so that
+    identical record IDs across different bases cannot false-match. An empty
+    prefix yields the original `atid-<record_id>` form, which the legacy
+    single-base config uses so its pre-existing order tags still match.
+    """
+    if tag_prefix:
+        return f'atid-{tag_prefix}-{record_id}'
     return f'atid-{record_id}'
 
 
-def find_existing_order(record_id):
+def find_existing_order(record_id, tag_prefix=''):
     """Return (order_id, order_number) for an order already created from this
     Airtable record, else None. Used to avoid duplicate orders if two runs overlap
     or if a previous run created the order but failed to write the ID back.
 
-    REST orders.json can't filter by tag, so we query the GraphQL Admin API.
+    REST orders.json can't filter by tag, so we query the GraphQL Admin API. When a
+    tag_prefix is set we also match the un-prefixed legacy tag, so orders created
+    before a base was namespaced are still recovered (no migration window).
     """
     headers = {
         'X-Shopify-Access-Token': SHOPIFY_API_TOKEN,
@@ -212,7 +231,11 @@ def find_existing_order(record_id):
         edges { node { id name } }
       }
     }'''
-    variables = {'q': f'tag:{order_idempotency_tag(record_id)}'}
+    tags = [order_idempotency_tag(record_id, tag_prefix)]
+    if tag_prefix:
+        tags.append(order_idempotency_tag(record_id, ''))
+    q = ' OR '.join(f'tag:{t}' for t in tags)
+    variables = {'q': q}
     r = requests.post(url, headers=headers, json={'query': query, 'variables': variables}, timeout=30)
     r.raise_for_status()
     data = r.json()
@@ -230,7 +253,7 @@ def find_existing_order(record_id):
     return str(order_id), str(order_number)
 
 
-def create_shopify_order(line_items, shipping_address, email, record_id):
+def create_shopify_order(line_items, shipping_address, email, record_id, tag_prefix=''):
     """Returns (order_id, order_number)."""
     headers = {
         'X-Shopify-Access-Token': SHOPIFY_API_TOKEN,
@@ -250,7 +273,7 @@ def create_shopify_order(line_items, shipping_address, email, record_id):
             ],
             # Idempotency key: lets find_existing_order() detect this order on a
             # later run so we never create a duplicate for the same record.
-            'tags': order_idempotency_tag(record_id),
+            'tags': order_idempotency_tag(record_id, tag_prefix),
         }
     }
     r = requests.post(url, headers=headers, json=body, timeout=30)
@@ -264,10 +287,15 @@ def create_shopify_order(line_items, shipping_address, email, record_id):
 
 # ── Per-table processing ──────────────────────────────────────────────────────
 
-def process_table(table_name, barcode_map, workbook_map):
+def process_table(base, table_name, barcode_map, workbook_map):
+    base_id = base['base_id']
+    api_key = base['api_key']
+    invoice_fields = base['invoice_fields']
+    tag_prefix = base['tag_prefix']
+
     formula = "AND(SEARCH('Submit Book Order', {Status}), NOT({Shopify Order ID}))"
-    records = get_records(table_name, formula)
-    print(f'  {table_name}: {len(records)} pending order(s)')
+    records = get_records(base_id, table_name, formula, api_key=api_key)
+    print(f'  [{base_id}] {table_name}: {len(records)} pending order(s)')
 
     for record in records:
         f = record.get('fields', {})
@@ -286,7 +314,7 @@ def process_table(table_name, barcode_map, workbook_map):
             msg = f'ERROR: missing required field(s): {", ".join(missing)}'
             log.append(msg)
             print(f'  {msg} — skipping record {record_id}')
-            update_record(table_name, record_id, {'Automation Log': ' | '.join(log)})
+            update_record(base_id, table_name, record_id, {'Automation Log': ' | '.join(log)}, api_key=api_key)
             send_error_email(
                 f'Book Order Error: {table_name} / {record_id}',
                 f'Cannot create Shopify order for record {record_id} in "{table_name}".\n\nLog: {" | ".join(log)}',
@@ -314,7 +342,7 @@ def process_table(table_name, barcode_map, workbook_map):
 
         if not line_items:
             if log:
-                update_record(table_name, record_id, {'Automation Log': ' | '.join(log)})
+                update_record(base_id, table_name, record_id, {'Automation Log': ' | '.join(log)}, api_key=api_key)
                 send_error_email(
                     f'Book Order Error: {table_name} / {record_id}',
                     f'Could not create Shopify order for record {record_id} in "{table_name}".\n\nLog: {" | ".join(log)}',
@@ -341,28 +369,28 @@ def process_table(table_name, barcode_map, workbook_map):
             # failed to write the ID back), recover it instead of creating a
             # duplicate. The confirmation email was already sent that time, so we
             # only repair the Airtable record here.
-            existing = find_existing_order(record_id)
+            existing = find_existing_order(record_id, tag_prefix)
             if existing:
                 order_id, order_number = existing
                 log.append(f'Shopify order #{order_number} already exists for this record — self-heal, skipped creation')
-                update_record(table_name, record_id, {
+                update_record(base_id, table_name, record_id, {
                     'Shopify Order ID': order_id,
                     'Automation Log': ' | '.join(log),
-                })
+                }, api_key=api_key)
                 print(f'  Order #{order_number} already existed for record {record_id} — wrote ID back, no duplicate created')
                 continue
 
-            order_id, order_number = create_shopify_order(line_items, shipping_address, parent_email, record_id)
-            invoice_field = INVOICE_FIELD_BY_TABLE.get(table_name, DEFAULT_INVOICE_FIELD)
+            order_id, order_number = create_shopify_order(line_items, shipping_address, parent_email, record_id, tag_prefix)
+            invoice_field = invoice_fields.get(table_name, DEFAULT_INVOICE_FIELD)
             # Fall back to 'Ariba Invoice #' (used by the Step Up / Mirakl tables)
             # before the Shopify order number. Tables without that field are
             # unaffected — f.get() returns None there.
             invoice_number = f.get(invoice_field) or f.get('Ariba Invoice #') or order_number
             log.append(f'Shopify order #{order_number} created ({len(line_items)} item(s), qty {quantity})')
-            update_record(table_name, record_id, {
+            update_record(base_id, table_name, record_id, {
                 'Shopify Order ID': order_id,
                 'Automation Log': ' | '.join(log),
-            })
+            }, api_key=api_key)
             print(f'  Created Shopify order #{order_number} for record {record_id}')
             send_order_confirmation_email(
                 to_email=parent_email,
@@ -378,7 +406,7 @@ def process_table(table_name, barcode_map, workbook_map):
             )
         except Exception as e:
             log.append(f'ERROR creating Shopify order: {e}')
-            update_record(table_name, record_id, {'Automation Log': ' | '.join(log)})
+            update_record(base_id, table_name, record_id, {'Automation Log': ' | '.join(log)}, api_key=api_key)
             print(f'  ERROR creating order for record {record_id} in {table_name}: {e}')
             send_error_email(
                 f'Book Order Error: {table_name} / {record_id}',
@@ -386,20 +414,68 @@ def process_table(table_name, barcode_map, workbook_map):
             )
 
 
+# ── Config ─────────────────────────────────────────────────────────────────────
+
+def build_bases():
+    """Return a normalized list of base configs, each a dict with keys:
+    base_id, tables (list), invoice_fields (dict), api_key, tag_prefix.
+
+    BOOK_ORDER_BASES (a JSON array) is authoritative when set; otherwise fall back
+    to a single base built from the legacy AIRTABLE_BASE_ID + BOOK_ORDER_TABLES
+    (+ BOOK_ORDER_INVOICE_FIELDS) env vars, so existing single-base setups are
+    unchanged.
+    """
+    if BOOK_ORDER_BASES:
+        parsed = json.loads(BOOK_ORDER_BASES)
+        bases = []
+        for entry in parsed:
+            base_id = entry['base_id']
+            bases.append({
+                'base_id': base_id,
+                'tables': [t.strip() for t in entry.get('tables', []) if t and t.strip()],
+                'invoice_fields': entry.get('invoice_fields') or {},
+                'api_key': entry.get('api_key') or AIRTABLE_API_KEY,
+                # Default: namespace the idempotency tag with the base id so record
+                # ids can't collide across bases. Set "tag_prefix": "" in the config
+                # to opt a base out (bare tag) — e.g. cosmetic parity with legacy.
+                'tag_prefix': base_id if entry.get('tag_prefix') is None else entry['tag_prefix'],
+            })
+        return bases
+
+    # Legacy single-base fallback — behavior identical to before.
+    if not AIRTABLE_BASE_ID or not BOOK_ORDER_TABLES:
+        raise RuntimeError(
+            'No book-order config found. Set BOOK_ORDER_BASES (JSON), or both '
+            'AIRTABLE_BASE_ID and BOOK_ORDER_TABLES.'
+        )
+    return [{
+        'base_id': AIRTABLE_BASE_ID,
+        'tables': [t.strip() for t in BOOK_ORDER_TABLES.split(',') if t.strip()],
+        'invoice_fields': INVOICE_FIELD_BY_TABLE,
+        'api_key': AIRTABLE_API_KEY,
+        'tag_prefix': '',  # bare tag — matches all pre-existing single-base orders
+    }]
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    tables = [t.strip() for t in BOOK_ORDER_TABLES.split(',') if t.strip()]
-    print(f'Processing {len(tables)} table(s) for book orders...')
+    bases = build_bases()
+    total_tables = sum(len(b['tables']) for b in bases)
+    print(f'Processing {total_tables} table(s) across {len(bases)} base(s)...')
 
+    # Shopify is base-independent — fetch the barcode map once and share it.
     barcode_map = get_shopify_barcode_map()
     print(f'Loaded {len(barcode_map)} Shopify variant barcodes')
 
-    workbook_map = get_workbook_map()
-    print(f'Loaded {len(workbook_map)} Workbook records')
-
-    for table_name in tables:
-        process_table(table_name, barcode_map, workbook_map)
+    for base in bases:
+        base_id = base['base_id']
+        print(f'=== Base {base_id}: {len(base["tables"])} table(s) ===')
+        # workbook_map is base-specific (keyed by that base's Airtable record IDs).
+        workbook_map = get_workbook_map(base_id, api_key=base['api_key'])
+        print(f'  Loaded {len(workbook_map)} Workbook records for {base_id}')
+        for table_name in base['tables']:
+            process_table(base, table_name, barcode_map, workbook_map)
 
 
 if __name__ == '__main__':
