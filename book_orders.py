@@ -14,10 +14,10 @@ BOOK_ORDER_TABLES = os.environ.get('BOOK_ORDER_TABLES')
 SHOPIFY_STORE_URL = os.environ['SHOPIFY_STORE_URL']
 SHOPIFY_API_TOKEN = os.environ['SHOPIFY_API_TOKEN']
 SHOPIFY_API_VERSION = '2024-01'
-# Multi-base config (optional, authoritative when set). JSON array of objects:
+# Multi-base config (optional). JSON array of objects, ADDED on top of the legacy
+# single base (see build_bases()):
 #   [{"base_id": "app...", "tables": ["T1","T2"],
 #     "invoice_fields": {"T2": "PO#"}, "api_key": "pat...", "tag_prefix": "..."}]
-# See build_bases() for field semantics and the legacy fallback.
 BOOK_ORDER_BASES = os.environ.get('BOOK_ORDER_BASES', '').strip()
 SMTP_HOST = os.environ.get('SMTP_HOST', '')
 SMTP_PORT = int(os.environ.get('SMTP_PORT') or 587)
@@ -420,16 +420,37 @@ def build_bases():
     """Return a normalized list of base configs, each a dict with keys:
     base_id, tables (list), invoice_fields (dict), api_key, tag_prefix.
 
-    BOOK_ORDER_BASES (a JSON array) is authoritative when set; otherwise fall back
-    to a single base built from the legacy AIRTABLE_BASE_ID + BOOK_ORDER_TABLES
-    (+ BOOK_ORDER_INVOICE_FIELDS) env vars, so existing single-base setups are
-    unchanged.
+    The legacy single base (AIRTABLE_BASE_ID + BOOK_ORDER_TABLES +
+    BOOK_ORDER_INVOICE_FIELDS) is always included when those env vars are present,
+    and BOOK_ORDER_BASES (a JSON array) *adds* further bases on top. This additive
+    model — rather than having BOOK_ORDER_BASES replace the legacy config — keeps
+    the existing base's opaque BOOK_ORDER_INVOICE_FIELDS overrides intact without
+    having to reproduce them in the JSON.
     """
+    bases = []
+    legacy_base_id = None
+
+    # Legacy single base from env, if configured. Kept exactly as before.
+    if AIRTABLE_BASE_ID and BOOK_ORDER_TABLES:
+        legacy_base_id = AIRTABLE_BASE_ID
+        bases.append({
+            'base_id': AIRTABLE_BASE_ID,
+            'tables': [t.strip() for t in BOOK_ORDER_TABLES.split(',') if t.strip()],
+            'invoice_fields': INVOICE_FIELD_BY_TABLE,
+            'api_key': AIRTABLE_API_KEY,
+            'tag_prefix': '',  # bare tag — matches all pre-existing single-base orders
+        })
+
+    # Additional bases from BOOK_ORDER_BASES (JSON), added on top of the legacy base.
     if BOOK_ORDER_BASES:
-        parsed = json.loads(BOOK_ORDER_BASES)
-        bases = []
-        for entry in parsed:
+        for entry in json.loads(BOOK_ORDER_BASES):
             base_id = entry['base_id']
+            if base_id == legacy_base_id:
+                # Already configured via the legacy env vars; skip to avoid
+                # processing it twice (the legacy entry keeps its invoice overrides).
+                print(f'  Skipping BOOK_ORDER_BASES entry for {base_id}: already '
+                      f'configured via AIRTABLE_BASE_ID / BOOK_ORDER_TABLES')
+                continue
             bases.append({
                 'base_id': base_id,
                 'tables': [t.strip() for t in entry.get('tables', []) if t and t.strip()],
@@ -437,24 +458,16 @@ def build_bases():
                 'api_key': entry.get('api_key') or AIRTABLE_API_KEY,
                 # Default: namespace the idempotency tag with the base id so record
                 # ids can't collide across bases. Set "tag_prefix": "" in the config
-                # to opt a base out (bare tag) — e.g. cosmetic parity with legacy.
+                # to opt a base out (bare tag).
                 'tag_prefix': base_id if entry.get('tag_prefix') is None else entry['tag_prefix'],
             })
-        return bases
 
-    # Legacy single-base fallback — behavior identical to before.
-    if not AIRTABLE_BASE_ID or not BOOK_ORDER_TABLES:
+    if not bases:
         raise RuntimeError(
             'No book-order config found. Set BOOK_ORDER_BASES (JSON), or both '
             'AIRTABLE_BASE_ID and BOOK_ORDER_TABLES.'
         )
-    return [{
-        'base_id': AIRTABLE_BASE_ID,
-        'tables': [t.strip() for t in BOOK_ORDER_TABLES.split(',') if t.strip()],
-        'invoice_fields': INVOICE_FIELD_BY_TABLE,
-        'api_key': AIRTABLE_API_KEY,
-        'tag_prefix': '',  # bare tag — matches all pre-existing single-base orders
-    }]
+    return bases
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

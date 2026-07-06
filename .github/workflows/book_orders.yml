@@ -39,8 +39,9 @@ jobs:
           SHOPIFY_STORE_URL: ${{ secrets.SHOPIFY_STORE_URL }}
           SHOPIFY_API_TOKEN: ${{ secrets.SHOPIFY_API_TOKEN }}
           BOOK_ORDER_TABLES: ${{ secrets.BOOK_ORDER_TABLES }}
-          # Multi-base config (optional). When set, supersedes AIRTABLE_BASE_ID +
-          # BOOK_ORDER_TABLES above; when unset, the legacy single-base path runs.
+          # Multi-base config (optional, JSON). Adds further Airtable bases on top
+          # of the AIRTABLE_BASE_ID + BOOK_ORDER_TABLES base above. Unset = legacy
+          # single-base behavior.
           BOOK_ORDER_BASES: ${{ secrets.BOOK_ORDER_BASES }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
