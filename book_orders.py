@@ -287,6 +287,21 @@ def create_shopify_order(line_items, shipping_address, email, record_id, tag_pre
 
 # ── Per-table processing ──────────────────────────────────────────────────────
 
+def scalar_field(fields, key, default=''):
+    """Return a single scalar string for an Airtable field.
+
+    Airtable *lookup* fields return a list (even for a single value) and
+    *formula* fields return their computed value; plain text/number fields return
+    a scalar. This flattens a list to its first element and coerces to str so the
+    downstream .strip()/Shopify calls work regardless of the source field type.
+    Plain scalars pass through unchanged, so existing tables are unaffected.
+    """
+    v = fields.get(key)
+    if isinstance(v, list):
+        v = v[0] if v else None
+    return default if v is None else str(v)
+
+
 def process_table(base, table_name, barcode_map, workbook_map):
     base_id = base['base_id']
     api_key = base['api_key']
@@ -302,10 +317,14 @@ def process_table(base, table_name, barcode_map, workbook_map):
         record_id = record['id']
         log = []
 
-        ship_name = (f.get('Parent Name') or f.get('Student Name') or f.get('Child Name') or '').strip()
-        parent_email = (f.get('Parent Email') or f.get('Account Email') or '').strip()
+        # Read scalar fields through scalar_field() so lookup-field lists (this
+        # base's Parent Email / Phone / address / Zip are lookups) and formula
+        # fields (Parent Name, State) both come back as plain strings.
+        g = lambda key, default='': scalar_field(f, key, default)
+        ship_name = (g('Parent Name') or g('Student Name') or g('Child Name')).strip()
+        parent_email = (g('Parent Email') or g('Account Email')).strip()
         required = ['Address Line 1', 'City', 'State', 'Zip Code']
-        missing = [k for k in required if not (f.get(k) or '').strip()]
+        missing = [k for k in required if not g(k).strip()]
         if not ship_name:
             missing.insert(0, 'Parent Name / Student Name / Child Name')
         if not parent_email:
@@ -321,8 +340,8 @@ def process_table(base, table_name, barcode_map, workbook_map):
             )
             continue
 
-        linked = f.get('Workbooks Ordered') or f.get('Workbooks') or []
-        quantity = int(f.get('Quantity') or 1)
+        linked = f.get('Workbooks Ordered') or f.get('Workbooks') or []  # linked records — keep as list
+        quantity = int(g('Quantity') or 1)
 
         line_items = []
         workbook_items = []  # (name, quantity) for confirmation email
@@ -354,13 +373,13 @@ def process_table(base, table_name, barcode_map, workbook_map):
         shipping_address = {
             'first_name': first,
             'last_name': rest[0] if rest else '',
-            'phone': f.get('Phone', ''),
-            'address1': f.get('Address Line 1', ''),
-            'address2': f.get('Address Line 2', ''),
-            'city': f.get('City', ''),
-            'province_code': f.get('State', ''),
+            'phone': g('Phone'),
+            'address1': g('Address Line 1'),
+            'address2': g('Address Line 2'),
+            'city': g('City'),
+            'province_code': g('State'),
             'country_code': 'US',
-            'zip': f.get('Zip Code', ''),
+            'zip': g('Zip Code'),
         }
 
         try:
@@ -385,7 +404,7 @@ def process_table(base, table_name, barcode_map, workbook_map):
             # Fall back to 'Ariba Invoice #' (used by the Step Up / Mirakl tables)
             # before the Shopify order number. Tables without that field are
             # unaffected — f.get() returns None there.
-            invoice_number = f.get(invoice_field) or f.get('Ariba Invoice #') or order_number
+            invoice_number = g(invoice_field) or g('Ariba Invoice #') or order_number
             log.append(f'Shopify order #{order_number} created ({len(line_items)} item(s), qty {quantity})')
             update_record(base_id, table_name, record_id, {
                 'Shopify Order ID': order_id,
@@ -397,12 +416,12 @@ def process_table(base, table_name, barcode_map, workbook_map):
                 order_number=invoice_number,
                 workbook_items=workbook_items,
                 recipient_name=full_name,
-                address_line1=f.get('Address Line 1', ''),
-                address_line2=f.get('Address Line 2', ''),
-                city=f.get('City', ''),
-                state=f.get('State', ''),
-                zip_code=f.get('Zip Code', ''),
-                phone=f.get('Phone', ''),
+                address_line1=g('Address Line 1'),
+                address_line2=g('Address Line 2'),
+                city=g('City'),
+                state=g('State'),
+                zip_code=g('Zip Code'),
+                phone=g('Phone'),
             )
         except Exception as e:
             log.append(f'ERROR creating Shopify order: {e}')
