@@ -156,6 +156,14 @@ def send_order_confirmation_email(to_email, order_number, workbook_items, recipi
 
 # ── Shopify helpers ───────────────────────────────────────────────────────────
 
+def norm_barcode(s):
+    """Normalize a barcode for matching: lowercase and strip everything that
+    isn't alphanumeric. Airtable and Shopify can store the same ISBN with
+    different hyphen glyphs, stray whitespace, or zero-width chars, all of
+    which would break an exact-string lookup."""
+    return re.sub(r'[^0-9a-z]', '', (s or '').lower())
+
+
 def get_shopify_barcode_map():
     """Fetch all product variants and return {barcode.lower(): variant_id}."""
     headers = {'X-Shopify-Access-Token': SHOPIFY_API_TOKEN}
@@ -167,7 +175,7 @@ def get_shopify_barcode_map():
         for product in r.json().get('products', []):
             for variant in product.get('variants', []):
                 if variant.get('barcode'):
-                    barcode_map[variant['barcode'].lower()] = variant['id']
+                    barcode_map[norm_barcode(variant['barcode'])] = variant['id']
         link = r.headers.get('Link', '')
         match = re.search(r'<([^>]+)>;\s*rel="next"', link)
         url = match.group(1) if match else None
@@ -188,7 +196,7 @@ def get_workbook_map(base_id, api_key=None):
         for record in data.get('records', []):
             f = record.get('fields', {})
             workbook_map[record['id']] = {
-                'barcode': (f.get('Barcode') or '').lower(),
+                'barcode': norm_barcode(f.get('Barcode')),
                 'name': f.get('Name', ''),
             }
         offset = data.get('offset')
