@@ -182,6 +182,67 @@ def get_shopify_barcode_map():
     return barcode_map
 
 
+def shopify_graphql(query, variables=None):
+    """POST a GraphQL query to Shopify's Admin API. Raises on transport or
+    GraphQL-level errors."""
+    headers = {
+        'X-Shopify-Access-Token': SHOPIFY_API_TOKEN,
+        'Content-Type': 'application/json',
+    }
+    url = f'https://{SHOPIFY_STORE_URL}/admin/api/{SHOPIFY_API_VERSION}/graphql.json'
+    r = requests.post(url, headers=headers, json={'query': query, 'variables': variables or {}}, timeout=30)
+    r.raise_for_status()
+    payload = r.json()
+    if payload.get('errors'):
+        raise RuntimeError(f'Shopify GraphQL errors: {payload["errors"]}')
+    return payload['data']
+
+
+def lookup_variant_by_barcode(raw_barcode):
+    """Authoritatively search Shopify for a variant by barcode.
+
+    The REST products.json map (fast path) silently omits products that aren't
+    active/published — draft, archived, or not on this token's sales channel —
+    so a barcode can "exist" in the Shopify admin yet be absent from the map.
+    GraphQL search sees all of them. Shopify tokenizes search terms on
+    punctuation, so the raw (hyphenated) Airtable value is the reliable term;
+    the digits-only form is tried as a fallback. Matches are confirmed by
+    normalized equality, never by the raw search alone.
+
+    Always returns a dict: {'variant_id': str|None, 'product_title',
+    'product_status', 'barcode', 'candidates': [ {barcode,title,status}, ... ]}.
+    'candidates' records what search surfaced, for diagnostics on a miss."""
+    target = norm_barcode(raw_barcode)
+    result = {'variant_id': None, 'product_title': None,
+              'product_status': None, 'barcode': None, 'candidates': []}
+    if not target:
+        return result
+    query = '''
+    query($q: String!) {
+      productVariants(first: 20, query: $q) {
+        edges { node { legacyResourceId barcode product { title status } } }
+      }
+    }'''
+    for term in dict.fromkeys([raw_barcode, target]):  # dedupe, preserve order
+        if not term:
+            continue
+        data = shopify_graphql(query, {'q': f'barcode:{term}'})
+        for edge in data['productVariants']['edges']:
+            node = edge['node']
+            result['candidates'].append({
+                'barcode': node.get('barcode'),
+                'title': node['product']['title'],
+                'status': node['product']['status'],
+            })
+            if norm_barcode(node.get('barcode')) == target:
+                result.update(variant_id=str(node['legacyResourceId']),
+                              product_title=node['product']['title'],
+                              product_status=node['product']['status'],
+                              barcode=node.get('barcode'))
+                return result
+    return result
+
+
 def get_workbook_map(base_id, api_key=None):
     """Return {airtable_record_id: {'barcode': str, 'name': str}} from the base's
     Workbooks table. Record IDs are base-scoped, so each base has its own map."""
@@ -197,6 +258,7 @@ def get_workbook_map(base_id, api_key=None):
             f = record.get('fields', {})
             workbook_map[record['id']] = {
                 'barcode': norm_barcode(f.get('Barcode')),
+                'barcode_raw': f.get('Barcode') or '',  # kept for GraphQL search + diagnostics
                 'name': f.get('Name', ''),
             }
         offset = data.get('offset')
@@ -356,10 +418,29 @@ def process_table(base, table_name, barcode_map, workbook_map):
         for wb_id in linked:
             wb = workbook_map.get(wb_id, {})
             barcode = wb.get('barcode', '')
+            barcode_raw = wb.get('barcode_raw', '')
             name = wb.get('name', '')
             variant_id = barcode_map.get(barcode)
             if not variant_id:
-                msg = f'ERROR: barcode "{barcode}" ({name}) not found in Shopify'
+                # REST fast path missed it. Fall back to an authoritative GraphQL
+                # lookup that also sees draft/archived/unpublished products.
+                match = {'variant_id': None, 'candidates': []}
+                try:
+                    match = lookup_variant_by_barcode(barcode_raw or barcode)
+                except Exception as e:
+                    print(f'  GraphQL fallback errored for barcode {barcode!r}: {e}')
+                variant_id = match.get('variant_id')
+                if variant_id:
+                    print(f'  Recovered barcode {barcode} via GraphQL — product '
+                          f'"{match.get("product_title")}" status={match.get("product_status")}')
+            if not variant_id:
+                cands = match.get('candidates') or []
+                cand_txt = '; '.join(
+                    f'{c.get("barcode")!r} [{c.get("status")}] {c.get("title")}' for c in cands
+                ) or 'none'
+                msg = (f'ERROR: barcode "{barcode}" ({name}) not found in Shopify '
+                       f'[Airtable raw={barcode_raw!r}; {len(barcode_map)} in REST map; '
+                       f'GraphQL candidates: {cand_txt}]')
                 log.append(msg)
                 print(f'  {msg} — skipping record {record_id}')
                 line_items = []
